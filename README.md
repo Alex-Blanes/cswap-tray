@@ -110,14 +110,22 @@ with a Windows notification. The *Prewarm* submenu offers two ways to start it:
   back on its own as soon as it detects the message landed. It piggybacks on a
   message you were going to send anyway, so it adds no extra usage. If nothing
   arrives within `arm_timeout_minutes`, the switch is undone and you are told.
-- **Start X's clock now** — sends a minimal message via
-  `cswap run <n> -- claude -p "ok"`, which applies the credential **to that
-  process only**: the account you are using is untouched.
+- **Run my prewarm task on X** — runs a prompt of your own on that account via
+  `cswap run`, which applies the credential **to that process only**: the
+  account you are using is untouched. The answer is written to
+  `last-prewarm-output.md` and opens from the menu.
+
+There is deliberately no built-in prompt. `prewarm.task` starts empty and the
+menu entry stays disabled until you set it, because the point is to send that
+account **work you actually want done and whose answer you read**. A canned
+prompt nobody reads would be a request whose only purpose is the clock, and that
+is a different thing — see [Fair use](#fair-use).
 
 | Setting | Default | What it does |
 |---|---|---|
 | `notify` | `true` | Warn when the reserve is cold |
 | `arm_timeout_minutes` | `15` | Wait before undoing an armed prewarm |
+| `task` | empty | Your own prompt to run on the reserve |
 
 Detection is indirect: a message is recognised because that account gains a 5h
 window or its usage goes up. Since polling runs every 30 s, the switch back
@@ -181,6 +189,27 @@ cargo test preview -- --ignored --nocapture       # preview the icon as ASCII
   change the display scaling.
 - Windows truncates tooltips at 127 characters, so with many accounts the hover
   summary is cut. The menu does show them all.
+
+## Fair use
+
+This tool assumes you hold more than one Claude subscription of your own — a
+personal one and a work one, say — and it only ever moves between accounts that
+are already yours. It shares nothing with anyone else, and it sends nothing you
+did not ask for.
+
+Two design decisions follow from Anthropic's Consumer Terms, whose section 3
+restricts accessing the service "through automated or non-human means":
+
+- **Nothing is sent without you asking.** Switching accounts, arming your next
+  message and running your task are all things you click. The app never sends a
+  message on its own.
+- **No synthetic prompt ships with it.** `prewarm.task` is yours to write, and
+  the answer is saved for you to read. A built-in ping whose only purpose was to
+  start a rate-limit clock would be automation aimed at the limits themselves,
+  which is exactly what that clause is about.
+
+If you are unsure whether your use fits your plan, read the terms yourself —
+this is not legal advice.
 
 ## License
 

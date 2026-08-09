@@ -109,14 +109,22 @@ parado, avisa una vez con una notificación de Windows. En el submenú
   cuanto detecta que le ha entrado el mensaje. Aprovecha un mensaje que ibas a
   mandar igualmente; no genera consumo extra. Si en `arm_timeout_minutes` no
   llega ninguno, deshace el cambio y te avisa.
-- **Arrancar el contador de X ahora** — manda un mensaje mínimo con
-  `cswap run <n> -- claude -p "ok"`, que aplica la credencial **solo a ese
-  proceso**: la cuenta que estás usando no se toca.
+- **Ejecutar mi tarea de precalentado en X** — lanza un prompt tuyo en esa
+  cuenta con `cswap run`, que aplica la credencial **solo a ese proceso**: la
+  cuenta que estás usando no se toca. La respuesta se guarda en
+  `last-prewarm-output.md` y se abre desde el menú.
+
+A propósito no viene ningún prompt de fábrica. `prewarm.task` empieza vacío y la
+entrada del menú está deshabilitada hasta que lo definas, porque la idea es
+mandarle a esa cuenta **trabajo que de verdad quieres y cuya respuesta lees**.
+Un prompt enlatado que nadie lee sería una petición cuyo único fin es el reloj,
+y eso es otra cosa — ver [Uso legítimo](#uso-legítimo).
 
 | Ajuste | Por defecto | Qué hace |
 |---|---|---|
 | `notify` | `true` | Avisar cuando la reserva está fría |
 | `arm_timeout_minutes` | `15` | Espera antes de deshacer un precalentado armado |
+| `task` | vacío | Tu propio prompt para ejecutar en la reserva |
 
 La detección del mensaje es indirecta: se reconoce porque a esa cuenta le
 aparece ventana de 5 h o le sube el consumo. Como el sondeo es cada 30 s, la
@@ -182,6 +190,27 @@ cargo test preview -- --ignored --nocapture       # previsualizar el icono en AS
   de pantalla, reinicia la app.
 - La tooltip de Windows corta a 127 caracteres, así que con muchas cuentas el
   resumen se trunca. El menú sí las muestra todas.
+
+## Uso legítimo
+
+Esta herramienta da por hecho que tienes más de una suscripción de Claude
+propia — una personal y otra del trabajo, por ejemplo — y solo se mueve entre
+cuentas que ya son tuyas. No comparte nada con terceros ni envía nada que no
+hayas pedido.
+
+De las Condiciones de Consumo de Anthropic, cuya sección 3 restringe acceder al
+servicio "through automated or non-human means", salen dos decisiones de diseño:
+
+- **No se manda nada sin que lo pidas.** Cambiar de cuenta, armar tu próximo
+  mensaje y ejecutar tu tarea son cosas que pulsas tú. La app nunca envía un
+  mensaje por su cuenta.
+- **No incluye ningún prompt sintético.** `prewarm.task` lo escribes tú, y la
+  respuesta se guarda para que la leas. Un ping de fábrica cuyo único fin fuera
+  arrancar el reloj de un límite sería automatización dirigida a los límites en
+  sí, que es justo de lo que habla esa cláusula.
+
+Si dudas de si tu uso encaja con tu plan, lee las condiciones tú mismo: esto no
+es asesoramiento legal.
 
 ## Licencia
 

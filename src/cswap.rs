@@ -172,20 +172,28 @@ pub fn switch(target: Option<u32>) -> Result<(), String> {
     }
 }
 
-/// Sends a minimal message under another account to open its 5h window.
+/// Runs one of your own prompts on another account, which opens that account's
+/// 5h window as a side effect of doing actual work.
 ///
 /// `cswap run` applies the credential **to that process only**, so the system's
-/// active account is untouched. The result is not awaited: it takes a few
-/// seconds and the tray must not block.
-pub fn prewarm_now(number: u32) -> Result<(), String> {
+/// active account is untouched. The answer is written to `out` so it is work
+/// you receive, not a request into the void. The child is returned instead of
+/// awaited: Claude takes a while and the tray must not block.
+pub fn run_task(number: u32, task: &str, out: &std::path::Path) -> Result<std::process::Child, String> {
+    if task.trim().is_empty() {
+        return Err("no prewarm task configured".to_string());
+    }
+    if let Some(dir) = out.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let file = std::fs::File::create(out).map_err(|e| format!("could not write the output: {e}"))?;
     Command::new(exe())
-        .args(["run", &number.to_string(), "--", "claude", "-p", "ok"])
+        .args(["run", &number.to_string(), "--", "claude", "-p", task])
         .creation_flags(CREATE_NO_WINDOW)
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(file))
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not prewarm: {e}"))
+        .map_err(|e| format!("could not run the prewarm task: {e}"))
 }
 
 /// Opens the interactive dashboard in a new console.

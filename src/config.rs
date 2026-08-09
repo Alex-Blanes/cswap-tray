@@ -87,6 +87,13 @@ pub struct PrewarmCfg {
     /// message through the reserve", the switch is undone and you are told.
     #[serde(default = "default_arm_timeout")]
     pub arm_timeout_minutes: u64,
+    /// A prompt of your own to run on the reserve account. Empty by default,
+    /// and deliberately so: the point is to send that account **work you
+    /// actually want done** and whose answer you read — the output is written
+    /// to `last-prewarm-output.md` and reachable from the menu. A canned
+    /// prompt nobody reads would just be a hollow request dressed up as work.
+    #[serde(default)]
+    pub task: String,
 }
 
 fn yes() -> bool {
@@ -98,7 +105,11 @@ fn default_arm_timeout() -> u64 {
 
 impl Default for PrewarmCfg {
     fn default() -> Self {
-        PrewarmCfg { notify: yes(), arm_timeout_minutes: default_arm_timeout() }
+        PrewarmCfg {
+            notify: yes(),
+            arm_timeout_minutes: default_arm_timeout(),
+            task: String::new(),
+        }
     }
 }
 
@@ -144,6 +155,12 @@ pub fn path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
     base.join("cswap-tray").join("config.json")
+}
+
+/// Where the answer to a prewarm task is written, so it is work you receive
+/// rather than a request into the void.
+pub fn prewarm_output_path() -> PathBuf {
+    path().with_file_name("last-prewarm-output.md")
 }
 
 pub fn load() -> Config {

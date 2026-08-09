@@ -167,11 +167,52 @@ impl Lang {
             format!("Pasar mi próximo mensaje por {name}{suffix}")
         )
     }
-    pub fn prewarm_now(self, name: &str) -> String {
+    pub fn prewarm_task_run(self, name: &str) -> String {
         s!(
             self,
-            format!("Start {name}'s clock now"),
-            format!("Arrancar el contador de {name} ahora")
+            format!("Run my prewarm task on {name}"),
+            format!("Ejecutar mi tarea de precalentado en {name}")
+        )
+    }
+    pub fn prewarm_task_unset(self) -> &'static str {
+        s!(
+            self,
+            "No prewarm task set (see prewarm.task in the config)",
+            "Sin tarea de precalentado (define prewarm.task en la config)"
+        )
+    }
+    pub fn open_last_output(self) -> &'static str {
+        s!(
+            self,
+            "Open the last prewarm answer",
+            "Abrir la última respuesta de precalentado"
+        )
+    }
+    pub fn task_started_title(self, name: &str) -> String {
+        s!(
+            self,
+            format!("Running your task on {name}"),
+            format!("Ejecutando tu tarea en {name}")
+        )
+    }
+    pub fn task_started_body(self) -> &'static str {
+        s!(
+            self,
+            "Its 5h window opens as a side effect. You will be told when the \
+             answer is ready.",
+            "Su ventana de 5 h se abre de paso. Te aviso cuando esté la \
+             respuesta."
+        )
+    }
+    pub fn task_done_title(self) -> &'static str {
+        s!(self, "Prewarm task finished", "Tarea de precalentado terminada")
+    }
+    pub fn task_done_body(self) -> &'static str {
+        s!(
+            self,
+            "The answer is in the menu, under 'Open the last prewarm answer'.",
+            "La respuesta está en el menú, en 'Abrir la última respuesta de \
+             precalentado'."
         )
     }
     pub fn prewarm_help(self) -> &'static [&'static str] {
@@ -187,8 +228,10 @@ impl Lang {
                 "",
                 "'My next message': switches accounts and",
                 "brings you back as soon as it lands.",
-                "'Now': sends a minimal message on the side,",
-                "without touching the account you are using.",
+                "'My task': runs a prompt of your own on the",
+                "reserve, without touching the account in use.",
+                "Set it in prewarm.task — real work whose",
+                "answer you read, not a hollow ping.",
             ][..],
             &[
                 "La ventana de 5 h la abre el primer mensaje,",
@@ -200,8 +243,10 @@ impl Lang {
                 "",
                 "'Mi próximo mensaje': cambia de cuenta y te",
                 "devuelve solo en cuanto detecta el mensaje.",
-                "'Ahora': manda un mensaje mínimo aparte,",
-                "sin tocar la cuenta que estás usando.",
+                "'Mi tarea': ejecuta un prompt tuyo en la",
+                "reserva, sin tocar la cuenta que usas.",
+                "Se define en prewarm.task: trabajo real cuya",
+                "respuesta lees, no un ping hueco.",
             ][..]
         )
     }
@@ -290,16 +335,6 @@ impl Lang {
             self,
             format!("No message arrived in time. You are back on {back}."),
             format!("No detecté ningún mensaje a tiempo. Vuelves a {back}.")
-        )
-    }
-    pub fn prewarm_sent_title(self) -> &'static str {
-        s!(self, "Prewarming", "Precalentando")
-    }
-    pub fn prewarm_sent_body(self) -> &'static str {
-        s!(
-            self,
-            "Minimal message sent to the reserve. Its clock starts now.",
-            "Mensaje mínimo enviado a la reserva. Su contador arranca ahora."
         )
     }
     pub fn prewarm_failed(self) -> &'static str {

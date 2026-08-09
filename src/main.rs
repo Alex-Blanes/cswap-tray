@@ -221,6 +221,7 @@ fn run_message_loop(
                     apply_auto_policy(cfg, state, cmd_tx);
                     dirty = true;
                 }
+                "prewarm:output" => open_path(&config::prewarm_output_path()),
                 "prewarm:cancel" => {
                     if let Some(armed) = state.armed.take() {
                         let _ = cmd_tx.send(Cmd::Switch(Some(armed.back_to)));
@@ -231,12 +232,9 @@ fn run_message_loop(
                     if let Some(n) = id.strip_prefix("prewarm:arm:").and_then(|n| n.parse().ok()) {
                         arm_prewarm(cfg, state, lang, cmd_tx, n);
                         dirty = true;
-                    } else if let Some(n) = id.strip_prefix("prewarm:now:").and_then(|n| n.parse().ok())
+                    } else if let Some(n) = id.strip_prefix("prewarm:task:").and_then(|n| n.parse().ok())
                     {
-                        match cswap::prewarm_now(n) {
-                            Err(e) => notify(lang.prewarm_failed(), &e),
-                            Ok(()) => notify(lang.prewarm_sent_title(), lang.prewarm_sent_body()),
-                        }
+                        run_prewarm_task(cfg, state, lang, n);
                     } else if let Some(n) = id.strip_prefix("switch:").and_then(|n| n.parse().ok()) {
                         let _ = cmd_tx.send(Cmd::Switch(Some(n)));
                     } else if let Some(n) = id.strip_prefix("prefer:").and_then(|n| n.parse::<u32>().ok())
@@ -333,6 +331,26 @@ fn arm_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx: &Sen
     state.armed = Some(Armed { target, back_to, had_window, base_pct, since: Instant::now() });
     let _ = cmd_tx.send(Cmd::Switch(Some(target)));
     notify(&lang.prewarming_title(&name), lang.prewarming_body());
+}
+
+/// Runs the user's own prompt on another account. Opening that account's 5h
+/// window is a side effect of work that was going to be done anyway — which is
+/// why there is no built-in prompt: an answer nobody reads would make this a
+/// hollow request wearing the costume of work.
+fn run_prewarm_task(cfg: &config::Config, state: &State, lang: Lang, target: u32) {
+    let out = config::prewarm_output_path();
+    let name = state.name_of(cfg, lang, target);
+    match cswap::run_task(target, &cfg.prewarm.task, &out) {
+        Err(e) => notify(lang.prewarm_failed(), &e),
+        Ok(mut child) => {
+            notify(&lang.task_started_title(&name), lang.task_started_body());
+            // Claude takes a while; wait off the UI thread and report back.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+                notify(lang.task_done_title(), lang.task_done_body());
+            });
+        }
+    }
 }
 
 /// With the prewarm armed: check whether the message landed (or the wait ran
@@ -521,10 +539,25 @@ fn prewarm_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
                 !running,
                 None,
             ));
+            // Running a task is worth it even if the clock is already going:
+            // it is work you wanted done, on the account you wanted it on.
+            let has_task = !cfg.prewarm.task.trim().is_empty();
             let _ = sub.append(&MenuItem::with_id(
-                format!("prewarm:now:{}", acc.number),
-                lang.prewarm_now(&name),
-                !running,
+                format!("prewarm:task:{}", acc.number),
+                if has_task {
+                    lang.prewarm_task_run(&name)
+                } else {
+                    lang.prewarm_task_unset().to_string()
+                },
+                has_task,
+                None,
+            ));
+        }
+        if config::prewarm_output_path().exists() {
+            let _ = sub.append(&MenuItem::with_id(
+                "prewarm:output",
+                lang.open_last_output(),
+                true,
                 None,
             ));
         }
@@ -609,14 +642,18 @@ fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max.saturating_sub(1)).collect::<String>() + "…"
 }
 
+/// Opens a file with its default application. Goes through explorer rather
+/// than `cmd /c start` so no shell parses the path.
+fn open_path(path: &std::path::Path) {
+    let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
+}
+
 fn open_config() {
     let path = config::path();
     if !path.exists() {
         config::save(&config::load());
     }
-    let _ = std::process::Command::new("cmd")
-        .args(["/c", "start", "", &path.to_string_lossy()])
-        .spawn();
+    open_path(&path);
 }
 
 #[cfg(test)]
