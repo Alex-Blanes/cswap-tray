@@ -202,8 +202,40 @@ fn exe() -> &'static str {
     })
 }
 
+/// Argv prefix for the capture calls. `CREATE_NO_WINDOW` only suppresses the
+/// console of the process we spawn: `cswap.exe` is a console-subsystem shim
+/// that re-launches the interpreter, and that grandchild gets a fresh console
+/// of its own, which flashes on screen. Driving the module through `pythonw`
+/// (GUI subsystem) keeps every link of the chain windowless. Falls back to the
+/// shim when the interpreter cannot be located.
+fn quiet() -> &'static Vec<String> {
+    static QUIET: OnceLock<Vec<String>> = OnceLock::new();
+    QUIET.get_or_init(|| {
+        let mut roots: Vec<PathBuf> = Vec::new();
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            roots.push(PathBuf::from(appdata).join("uv/tools/claude-swap"));
+        }
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            roots.push(PathBuf::from(&home).join("pipx/venvs/claude-swap"));
+        }
+        for root in roots {
+            let py = root.join("Scripts/pythonw.exe");
+            if py.is_file() {
+                return vec![
+                    py.to_string_lossy().into_owned(),
+                    "-m".into(),
+                    "claude_swap".into(),
+                ];
+            }
+        }
+        vec![exe().to_string()]
+    })
+}
+
 fn run(args: &[&str]) -> Result<String, String> {
-    let out = Command::new(exe())
+    let prefix = quiet();
+    let out = Command::new(&prefix[0])
+        .args(&prefix[1..])
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -255,7 +287,9 @@ pub fn run_task(number: u32, task: &str, out: &std::path::Path) -> Result<std::p
         let _ = std::fs::create_dir_all(dir);
     }
     let file = std::fs::File::create(out).map_err(|e| format!("could not write the output: {e}"))?;
-    Command::new(exe())
+    let prefix = quiet();
+    Command::new(&prefix[0])
+        .args(&prefix[1..])
         .args(["run", &number.to_string(), "--", "claude", "-p", task])
         .creation_flags(CREATE_NO_WINDOW)
         .stdout(std::process::Stdio::from(file))
@@ -275,6 +309,20 @@ pub fn open_tui() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_launcher_never_goes_through_a_console_shim() {
+        let prefix = quiet();
+        assert!(!prefix.is_empty());
+        // Either we found the interpreter and drive the module directly, or we
+        // fell back to the shim. Anything else means the resolver is broken.
+        if prefix.len() > 1 {
+            assert!(prefix[0].to_lowercase().ends_with("pythonw.exe"));
+            assert_eq!(prefix[1..], ["-m", "claude_swap"]);
+        } else {
+            assert_eq!(prefix[0], exe());
+        }
+    }
 
     fn win(resets_at: &str, pct: f32) -> Window {
         Window { pct, resets_at: Some(resets_at.into()), countdown: None, clock: None }
