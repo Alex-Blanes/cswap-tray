@@ -14,10 +14,10 @@ claude-swap trae un `menubar` para macOS; esto cubre el hueco en Windows.
 
 ```
 ┌──────────────┐
-│ ██████    ▓ ░│   letra  = identidad de la cuenta, con su color
-│ ██  ██    ▓ ░│   barra izquierda = ventana de 5 h
-│ ██████    ▓ ▓│   barra derecha   = ventana de 7 d
-│ ██        ▓ ▓│
+│▞██████    ▓ ░│   punto rojo = una cuenta pide iniciar sesión
+│ ██  ██    ▓ ░│   letra  = identidad de la cuenta, con su color
+│ ██████    ▓ ▓│   barra izquierda = ventana de 5 h
+│ ██        ▓ ▓│   barra derecha   = ventana de 7 d
 │ ██        ▓ ▓│   se llenan de abajo arriba
 └──────────────┘   verde <70 %, ámbar 70-90 %, rojo ≥90 %
 ```
@@ -26,6 +26,21 @@ claude-swap trae un `menubar` para macOS; esto cubre el hueco en Windows.
 - **Clic derecho**: menú con cada cuenta y su uso (incluida la hora de reinicio
   de cada ventana), actualizar, abrir `cswap tui`, editar apariencia y salir.
 - **Pasar el ratón**: resumen de todas las cuentas.
+
+Cuando el *refresh token* de una cuenta muere, `cswap` deja de poder leer su
+cuota y el auto-cambio deja de considerarla como destino. Antes eso era mudo:
+ahora aparece el punto rojo en el icono estés en la cuenta que estés, la entrada
+del menú pasa a `requiere iniciar sesión` y salta un aviso — al caducar y de
+nuevo en cada arranque, porque arreglarlo (`/login` en Claude Code y luego
+`cswap add`) solo puedes hacerlo tú y un ordenador que has apagado olvida que
+pasó.
+
+Los porcentajes respetan la hora de reinicio. `cswap` solo refresca el uso
+cuando algo llama a la API, así que al llegar al tope la lectura se queda
+clavada en el 100 % mucho después de que la ventana se reinicie; cualquier
+ventana cuya hora de reinicio ya pasó se lee como 0 %.
+
+Todo se dibuja en tiempo de ejecución: sin imágenes ni fuentes externas.
 
 ## Requisitos
 

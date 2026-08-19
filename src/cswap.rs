@@ -53,7 +53,7 @@ impl Account {
             Win::FiveHour => u.five_hour.as_ref(),
             Win::SevenDay => u.seven_day.as_ref(),
         }?;
-        Some(w.pct)
+        Some(w.effective_pct())
     }
 
     pub fn window(&self, window: Win) -> Option<&Window> {
@@ -100,12 +100,80 @@ pub struct Usage {
 pub struct Window {
     #[serde(default)]
     pub pct: f32,
+    /// When this window rolls over, RFC3339 as cswap emits it.
+    #[serde(default)]
+    pub resets_at: Option<String>,
     /// Time left, already formatted by cswap, e.g. "4h 20m".
     #[serde(default)]
     pub countdown: Option<String>,
     /// Reset time, already formatted, e.g. "20:49".
     #[serde(default)]
     pub clock: Option<String>,
+}
+
+impl Window {
+    /// The reading belongs to a cycle that already closed. cswap only refreshes
+    /// usage when something asks the API, so after hitting the cap the last
+    /// reading stays pinned at its old percentage long past the reset — which
+    /// is exactly when the tray must know the quota is back.
+    pub fn expired(&self) -> bool {
+        self.resets_at
+            .as_deref()
+            .and_then(epoch_of)
+            .is_some_and(|t| t <= now_epoch())
+    }
+
+    /// Percentage to act on and to show: zero once the window has rolled over.
+    pub fn effective_pct(&self) -> f32 {
+        if self.expired() { 0.0 } else { self.pct }
+    }
+}
+
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Epoch seconds of an RFC3339 stamp as cswap emits it
+/// ("2026-08-19T20:30:00.386497+00:00", or with a "Z"). Anything it cannot
+/// fully parse yields `None`, which every caller reads as "no idea" and never
+/// as "expired" — a misread must not fake free quota.
+fn epoch_of(ts: &str) -> Option<i64> {
+    let num = |a: usize, z: usize| ts.get(a..z)?.parse::<i64>().ok();
+    let (year, month, day) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (hour, min, sec) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // days_from_civil (Howard Hinnant): calendar date -> days since 1970-01-01.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+
+    let mut secs = days * 86_400 + hour * 3_600 + min * 60 + sec;
+
+    // Trailing zone: "Z", "+HH:MM" or "-HH:MM", after any fractional seconds.
+    let tail = ts[19..].trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    if !tail.is_empty() && tail != "Z" {
+        let sign = match tail.as_bytes()[0] {
+            b'+' => -1,
+            b'-' => 1,
+            _ => return None,
+        };
+        secs += sign * (num_at(tail, 1, 3)? * 3_600 + num_at(tail, 4, 6)? * 60);
+    }
+    Some(secs)
+}
+
+fn num_at(s: &str, a: usize, z: usize) -> Option<i64> {
+    s.get(a..z)?.parse().ok()
 }
 
 /// Locates the executable once. `cswap` is usually on PATH, but a tray app
@@ -202,4 +270,62 @@ pub fn open_tui() {
         .args(["/c", "start", "", "cmd", "/k", exe(), "tui"])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn win(resets_at: &str, pct: f32) -> Window {
+        Window { pct, resets_at: Some(resets_at.into()), countdown: None, clock: None }
+    }
+
+    #[test]
+    fn parses_the_shapes_cswap_emits() {
+        assert_eq!(epoch_of("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(epoch_of("2026-08-19T20:30:00.386497+00:00"), Some(1_787_171_400));
+        // Same instant written in a +02:00 zone.
+        assert_eq!(
+            epoch_of("2026-08-19T22:30:00+02:00"),
+            epoch_of("2026-08-19T20:30:00Z")
+        );
+        // Leap day, and a rejection.
+        assert_eq!(epoch_of("2024-02-29T00:00:00Z"), Some(1_709_164_800));
+        assert_eq!(epoch_of("not a date"), None);
+        assert_eq!(epoch_of("2026-13-01T00:00:00Z"), None);
+    }
+
+    #[test]
+    fn a_window_past_its_reset_reads_as_empty() {
+        let spent = win("2020-01-01T00:00:00Z", 100.0);
+        assert!(spent.expired());
+        assert_eq!(spent.effective_pct(), 0.0);
+    }
+
+    #[test]
+    fn a_live_window_keeps_its_reading() {
+        let live = win("2999-01-01T00:00:00Z", 100.0);
+        assert!(!live.expired());
+        assert_eq!(live.effective_pct(), 100.0);
+    }
+
+    #[test]
+    fn an_unreadable_reset_never_fakes_free_quota() {
+        let unknown = Window { pct: 100.0, resets_at: None, countdown: None, clock: None };
+        assert!(!unknown.expired());
+        assert_eq!(unknown.effective_pct(), 100.0);
+    }
+
+    #[test]
+    fn account_pct_follows_the_expiry() {
+        let acc: Account = serde_json::from_str(
+            r#"{"number":1,"email":"a@x.com","active":true,"usageStatus":"ok",
+                "usage":{"fiveHour":{"pct":100.0,"resetsAt":"2020-01-01T00:00:00Z"},
+                         "sevenDay":{"pct":11.0,"resetsAt":"2999-01-01T00:00:00Z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(acc.pct(Win::FiveHour), Some(0.0));
+        assert_eq!(acc.pct(Win::SevenDay), Some(11.0));
+        assert_eq!(acc.binding_pct(), Some(11.0));
+    }
 }

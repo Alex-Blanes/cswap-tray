@@ -264,6 +264,7 @@ impl Lang {
                 "Right bar: usage of the last 7 days.",
                 "They fill from the bottom up.",
                 "Green <70%  ·  Amber 70-90%  ·  Red ≥90%",
+                "Red pip in the corner: an account needs re-login.",
                 "",
                 "Left click: switch account.",
                 "Right click: this menu.",
@@ -276,12 +277,33 @@ impl Lang {
                 "Barra derecha: uso de los últimos 7 días.",
                 "Se llenan de abajo arriba.",
                 "Verde <70%  ·  Ámbar 70-90%  ·  Rojo ≥90%",
+                "Punto rojo en la esquina: una cuenta pide login.",
                 "",
                 "Clic izquierdo: cambiar de cuenta.",
                 "Clic derecho: este menú.",
                 "",
                 "Las cuentas se añaden con 'cswap add'.",
             ][..]
+        )
+    }
+
+    // --- re-login ----------------------------------------------------------
+    /// Tag next to an account in the menu whose token cswap can no longer use.
+    pub fn relogin_tag(self) -> &'static str {
+        s!(self, "re-login needed", "requiere iniciar sesión")
+    }
+    pub fn relogin_title(self, name: &str) -> String {
+        s!(
+            self,
+            format!("{name}: session expired"),
+            format!("{name}: sesión caducada")
+        )
+    }
+    pub fn relogin_body(self) -> &'static str {
+        s!(
+            self,
+            "Open Claude Code on that account, run /login, then: cswap add",
+            "Abre Claude Code en esa cuenta, usa /login y luego: cswap add"
         )
     }
 

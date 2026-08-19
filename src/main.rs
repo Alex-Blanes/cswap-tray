@@ -66,6 +66,7 @@ fn main() {
         last_auto_switch: None,
         armed: None,
         cold_notified: false,
+        relogin_notified: std::collections::BTreeSet::new(),
     };
 
     let tray = TrayIconBuilder::new()
@@ -90,6 +91,9 @@ struct State {
     armed: Option<Armed>,
     /// Keeps the cold-reserve notice from repeating on every poll.
     cold_notified: bool,
+    /// Accounts already warned about a dead token, so the toast fires on the
+    /// transition and not on every poll.
+    relogin_notified: std::collections::BTreeSet<u32>,
 }
 
 /// State of "send my next message through the reserve".
@@ -189,6 +193,7 @@ fn run_message_loop(
                     state.error = None;
                     // Prewarm wins: while it is armed the automatic policy must
                     // not move the account under our feet.
+                    check_relogin(cfg, state, lang);
                     if state.armed.is_some() {
                         follow_up_prewarm(cfg, state, lang, cmd_tx);
                     } else {
@@ -293,6 +298,25 @@ fn notify(title: &str, body: &str) {
         .show();
 }
 
+/// Warns once per account whose refresh token died. Without this the only
+/// symptom is an account silently dropping out of the rotation: auto-switch
+/// refuses it as a target and nothing on screen says why.
+fn check_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
+    let dead: Vec<(u32, String)> = state
+        .accounts()
+        .iter()
+        .filter(|a| !a.is_ok())
+        .map(|a| (a.number, config::presentation(cfg, &a.email, a.number).0))
+        .collect();
+    for (number, name) in &dead {
+        if state.relogin_notified.insert(*number) {
+            notify(&lang.relogin_title(name), lang.relogin_body());
+        }
+    }
+    // Recovered accounts re-arm the warning for next time.
+    state.relogin_notified.retain(|n| dead.iter().any(|(d, _)| d == n));
+}
+
 /// Warns once that you are working while the reserve sits cold.
 fn check_cold_reserve(cfg: &config::Config, state: &mut State, lang: Lang) {
     if !cfg.prewarm.notify {
@@ -386,6 +410,7 @@ fn follow_up_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
 }
 
 fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
+    let alert = state.accounts().iter().any(|a| !a.is_ok());
     let spec = match state.active() {
         Some(acc) => {
             let (_, letter, color) = config::presentation(cfg, &acc.email, acc.number);
@@ -395,6 +420,7 @@ fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
                 five_hour: acc.pct(cswap::Win::FiveHour),
                 seven_day: acc.pct(cswap::Win::SevenDay),
                 stale: !acc.is_ok(),
+                alert,
             }
         }
         None => icon::IconSpec {
@@ -403,6 +429,7 @@ fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
             five_hour: None,
             seven_day: None,
             stale: true,
+            alert,
         },
     };
     Icon::from_rgba(icon::render(&spec, size), size, size).expect("invalid icon buffer")
@@ -423,7 +450,11 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
     for acc in state.accounts() {
         let (name, letter, _) = config::presentation(cfg, &acc.email, acc.number);
         let mark = if acc.active { "●" } else { "○" };
-        let label = format!("{mark} {name} ({letter}) — {}", usage_long(acc));
+        let label = if acc.is_ok() {
+            format!("{mark} {name} ({letter}) — {}", usage_long(acc))
+        } else {
+            format!("{mark} {name} ({letter}) — ⚠ {}", lang.relogin_tag())
+        };
         let _ = menu.append(&MenuItem::with_id(
             format!("switch:{}", acc.number),
             label,
@@ -581,7 +612,7 @@ fn legend_submenu(lang: Lang) -> Submenu {
 
 fn pct_of(w: Option<&cswap::Window>) -> String {
     match w {
-        Some(w) => format!("{:.0}%", w.pct),
+        Some(w) => format!("{:.0}%", w.effective_pct()),
         None => "—".to_string(),
     }
 }

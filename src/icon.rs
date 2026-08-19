@@ -90,6 +90,9 @@ pub struct IconSpec {
     pub seven_day: Option<f32>,
     /// Degraded state: the letter is drawn in grey.
     pub stale: bool,
+    /// Some account needs re-authentication: a red pip in the corner, drawn
+    /// even when the account in question is not the active one.
+    pub alert: bool,
 }
 
 struct Canvas {
@@ -168,6 +171,14 @@ pub fn render(spec: &IconSpec, size: u32) -> Vec<u8> {
         }
     }
 
+    // --- alert pip --------------------------------------------------------
+    // Last, so it sits on top of the letter: a dead token is worth more than
+    // one corner of a glyph you can still recognise from the rest.
+    if spec.alert {
+        let d = (size / 8).max(2);
+        c.rect(0, 0, d, d, [RED[0], RED[1], RED[2], 255]);
+    }
+
     c.px
 }
 
@@ -176,7 +187,7 @@ mod tests {
     use super::*;
 
     fn spec() -> IconSpec {
-        IconSpec { letter: 'W', color: [59, 130, 246], five_hour: Some(50.0), seven_day: Some(100.0), stale: false }
+        IconSpec { letter: 'W', color: [59, 130, 246], five_hour: Some(50.0), seven_day: Some(100.0), stale: false, alert: false }
     }
 
     #[test]
@@ -215,6 +226,16 @@ mod tests {
     }
 
     #[test]
+    fn alert_paints_the_corner_and_silence_leaves_it_alone() {
+        let size = 16u32;
+        let at = |px: &[u8]| [px[0], px[1], px[2], px[3]];
+        let quiet = render(&IconSpec { alert: false, ..spec() }, size);
+        let loud = render(&IconSpec { alert: true, ..spec() }, size);
+        assert_ne!(at(&quiet), [RED[0], RED[1], RED[2], 255]);
+        assert_eq!(at(&loud), [RED[0], RED[1], RED[2], 255]);
+    }
+
+    #[test]
     fn unknown_char_falls_back_to_question_mark() {
         assert_eq!(glyph('%'), glyph('?'));
     }
@@ -230,6 +251,7 @@ mod tests {
                 five_hour: Some(p5),
                 seven_day: Some(p7),
                 stale: false,
+                alert: false,
             };
             let px = render(&s, size);
             println!("\n{letter} {size}x{size}  5h {p5}%  7d {p7}%");

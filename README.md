@@ -14,10 +14,10 @@ ships a `menubar` for macOS; this fills the gap on Windows.
 
 ```
 ┌──────────────┐
-│ ██████    ▓ ░│   letter    = the account in use, in its own colour
-│ ██  ██    ▓ ░│   left bar  = last 5 hours
-│ ██████    ▓ ▓│   right bar = last 7 days
-│ ██        ▓ ▓│
+│▞██████    ▓ ░│   red pip   = an account needs re-login
+│ ██  ██    ▓ ░│   letter    = the account in use, in its own colour
+│ ██████    ▓ ▓│   left bar  = last 5 hours
+│ ██        ▓ ▓│   right bar = last 7 days
 │ ██        ▓ ▓│   filled from the bottom up
 └──────────────┘   green <70%, amber 70-90%, red ≥90%
 ```
@@ -26,6 +26,17 @@ ships a `menubar` for macOS; this fills the gap on Windows.
 - **Right click**: menu with every account and its usage (including when each
   window resets), auto-switch, prewarming, the icon legend and the actions.
 - **Hover**: a summary of all accounts.
+
+When an account's refresh token dies, `cswap` can no longer read its quota and
+auto-switch stops considering it as a target. That used to be silent, so the pip
+appears on the icon whichever account you are on, the menu entry says
+`re-login needed`, and a notification fires — on the transition and again on
+every launch, since the fix (`/login` in Claude Code, then `cswap add`) is
+something only you can do and a machine you switched off forgets it happened.
+
+Percentages honour the reset time. `cswap` refreshes usage only when something
+asks the API, so after hitting the cap a reading stays pinned at 100% long past
+the window rolling over; any window whose reset has passed is read as 0%.
 
 Everything is drawn at runtime: no image assets, no external font.
 
