@@ -34,6 +34,16 @@ appears on the icon whichever account you are on, the menu entry says
 every launch, since the fix (`/login` in Claude Code, then `cswap add`) is
 something only you can do and a machine you switched off forgets it happened.
 
+Naming a problem is not fixing it, and the commands are the part people forget,
+so **clicking that notification opens a console that walks through the repair**.
+The dead account's own menu entry opens the same guide, which is the way back
+once a toast is gone. It starts by asking `cswap` which account Claude Code is
+signed in as *right now*: if you already logged in and simply never ran
+`cswap add`, saving the token is all that is left and the login step is skipped.
+Otherwise it makes the account active first — so the new credential lands in
+that slot instead of over a live account's — waits while you do the `/login`,
+saves it, and checks the account actually came back.
+
 Percentages honour the reset time. `cswap` refreshes usage only when something
 asks the API, so after hitting the cap a reading stays pinned at 100% long past
 the window rolling over; any window whose reset has passed is read as 0%.
@@ -148,6 +158,18 @@ To check Windows notifications get through:
 ```powershell
 .\target\release\cswap-tray.exe --test-toast
 ```
+
+To rehearse the whole re-login path — the notification, its button and the
+console the click opens — without waiting for a token to die:
+
+```powershell
+.\target\release\cswap-tray.exe --test-relogin
+```
+
+It aims at the account you are already on, so every command the guide runs is a
+harmless refresh of a live account. The click is served in-process, so that
+rehearsal stays alive for 90 s; the tray itself is always running and needs no
+such thing.
 
 ## Appearance and language
 

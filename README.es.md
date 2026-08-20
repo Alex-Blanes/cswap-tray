@@ -35,6 +35,17 @@ nuevo en cada arranque, porque arreglarlo (`/login` en Claude Code y luego
 `cswap add`) solo puedes hacerlo tú y un ordenador que has apagado olvida que
 pasó.
 
+Nombrar un problema no es arreglarlo, y lo que se olvida son los comandos, así
+que **al pulsar ese aviso se abre una consola que lleva el arreglo paso a
+paso**. La propia entrada de la cuenta muerta en el menú abre la misma guía, que
+es la vuelta cuando el aviso ya se ha esfumado. Empieza preguntándole a `cswap`
+con qué cuenta está Claude Code *ahora mismo*: si ya iniciaste sesión y
+simplemente no llegaste a lanzar `cswap add`, lo único que falta es guardar el
+token y el paso del login se salta. Si no, activa antes la cuenta —para que la
+credencial nueva caiga en su hueco y no encima de la de una cuenta viva—,
+espera a que hagas el `/login`, la guarda y comprueba que la cuenta ha vuelto de
+verdad.
+
 Los porcentajes respetan la hora de reinicio. `cswap` solo refresca el uso
 cuando algo llama a la API, así que al llegar al tope la lectura se queda
 clavada en el 100 % mucho después de que la ventana se reinicie; cualquier
@@ -152,6 +163,18 @@ Para comprobar que los avisos de Windows llegan:
 ```powershell
 .\target\release\cswap-tray.exe --test-toast
 ```
+
+Y para ensayar el camino completo del re-login —el aviso, su botón y la consola
+que abre el clic— sin esperar a que caduque un token:
+
+```powershell
+.\target\release\cswap-tray.exe --test-relogin
+```
+
+Apunta a la cuenta en la que ya estás, así que todo lo que lanza la guía es un
+refresco inofensivo de una cuenta viva. El clic se atiende en el propio proceso,
+por eso el ensayo se queda vivo 90 s; la bandeja, que siempre lo está, no
+necesita nada de eso.
 
 ## Apariencia e idioma
 

@@ -13,6 +13,9 @@ use std::sync::OnceLock;
 /// Keeps a console window from flashing when the CLI is invoked from a
 /// windowed app.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The opposite, for the one case where the window *is* the point: a console
+/// the user reads and types into.
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -296,6 +299,30 @@ pub fn run_task(number: u32, task: &str, out: &std::path::Path) -> Result<std::p
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| format!("could not run the prewarm task: {e}"))
+}
+
+/// The guided re-login, shipped inside the binary so there is no second file
+/// to keep in sync with an installed copy.
+const RELOGIN_GUIDE: &str = include_str!("../scripts/relogin.ps1");
+
+/// Opens the guided re-login for an account whose token died, in its own
+/// console: it runs `cswap switch`, `claude` and `cswap add` in the order that
+/// lands the new credential in the right slot.
+///
+/// The script is rewritten on every launch, so an upgraded tray always drives
+/// its own steps and never a stale copy left in `dir` by an older version.
+pub fn open_relogin_guide(dir: &std::path::Path, number: u32, email: &str, lang: &str) {
+    let script = dir.join("relogin.ps1");
+    if std::fs::create_dir_all(dir).is_err() || std::fs::write(&script, RELOGIN_GUIDE).is_err() {
+        return;
+    }
+    // `powershell` (5.1) rather than `pwsh`: it is the one Windows guarantees.
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .args(["-Account", &number.to_string(), "-Email", email, "-Lang", lang])
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn();
 }
 
 /// Opens the interactive dashboard in a new console.

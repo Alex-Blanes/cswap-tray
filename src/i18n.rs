@@ -306,6 +306,16 @@ impl Lang {
             "Abre Claude Code en esa cuenta, usa /login y luego: cswap add"
         )
     }
+    /// Button on the toast, and the same wording in the menu: both open the
+    /// guided re-login, because a toast is gone in seconds and the menu is the
+    /// only way back to it.
+    pub fn relogin_action(self) -> &'static str {
+        s!(self, "Walk me through it", "Guíame paso a paso")
+    }
+    /// Two-letter code, to hand the language over to the re-login script.
+    pub fn code(self) -> &'static str {
+        s!(self, "en", "es")
+    }
 
     // --- notifications -----------------------------------------------------
     pub fn toast_test(self) -> &'static str {

@@ -48,6 +48,25 @@ fn main() {
         notify("cswap-tray", cfg_lang.toast_test());
         return;
     }
+    // Rehearses the whole re-login path — the toast, its button, and the guided
+    // console the click opens — without waiting for a token to actually die.
+    // It targets the *active* account on purpose: every command the guide runs
+    // is then a no-op refresh of the account you are already on.
+    if std::env::args().any(|a| a == "--test-relogin") {
+        let acc = cswap::list().ok().and_then(|s| {
+            s.accounts
+                .iter()
+                .find(|a| a.active)
+                .or_else(|| s.accounts.first())
+                .map(|a| (a.number, a.email.clone()))
+        });
+        let (number, email) = acc.unwrap_or((1, String::new()));
+        notify_relogin(cfg_lang, number, "test", &email);
+        // The click is served in-process, so the rehearsal has to outlive the
+        // toast. The real tray is always up and needs none of this.
+        std::thread::sleep(Duration::from_secs(90));
+        return;
+    }
     unsafe { SetProcessDPIAware() };
 
     let mut cfg = config::load();
@@ -242,6 +261,11 @@ fn run_message_loop(
                         run_prewarm_task(cfg, state, lang, n);
                     } else if let Some(n) = id.strip_prefix("switch:").and_then(|n| n.parse().ok()) {
                         let _ = cmd_tx.send(Cmd::Switch(Some(n)));
+                    } else if let Some(n) = id.strip_prefix("relogin:").and_then(|n| n.parse::<u32>().ok())
+                    {
+                        if let Some(acc) = state.accounts().iter().find(|a| a.number == n) {
+                            cswap::open_relogin_guide(&config::dir(), n, &acc.email, lang.code());
+                        }
                     } else if let Some(n) = id.strip_prefix("prefer:").and_then(|n| n.parse::<u32>().ok())
                     {
                         if let Some(acc) = state.accounts().iter().find(|a| a.number == n) {
@@ -302,19 +326,42 @@ fn notify(title: &str, body: &str) {
 /// symptom is an account silently dropping out of the rotation: auto-switch
 /// refuses it as a target and nothing on screen says why.
 fn check_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
-    let dead: Vec<(u32, String)> = state
+    let dead: Vec<(u32, String, String)> = state
         .accounts()
         .iter()
         .filter(|a| !a.is_ok())
-        .map(|a| (a.number, config::presentation(cfg, &a.email, a.number).0))
+        .map(|a| {
+            (a.number, config::presentation(cfg, &a.email, a.number).0, a.email.clone())
+        })
         .collect();
-    for (number, name) in &dead {
+    for (number, name, email) in &dead {
         if state.relogin_notified.insert(*number) {
-            notify(&lang.relogin_title(name), lang.relogin_body());
+            notify_relogin(lang, *number, name, email);
         }
     }
     // Recovered accounts re-arm the warning for next time.
-    state.relogin_notified.retain(|n| dead.iter().any(|(d, _)| d == n));
+    state.relogin_notified.retain(|n| dead.iter().any(|(d, _, _)| d == n));
+}
+
+/// The "session expired" toast. Clicking it — body or button — opens the
+/// guided re-login, which is the whole point: the toast names a problem you
+/// cannot fix from the toast, and the commands are the part people forget.
+///
+/// No COM activator is registered for this: Windows raises `Activated`
+/// in-process, which is enough because the tray is always running.
+fn notify_relogin(lang: Lang, number: u32, name: &str, email: &str) {
+    let (mail, code) = (email.to_string(), lang.code());
+    let _ = Toast::new(Toast::POWERSHELL_APP_ID)
+        .title(&lang.relogin_title(name))
+        .text1(lang.relogin_body())
+        .add_button(lang.relogin_action(), "relogin")
+        // Long, not Short: five seconds is not enough to react to it.
+        .duration(ToastDuration::Long)
+        .on_activated(move |_| {
+            cswap::open_relogin_guide(&config::dir(), number, &mail, code);
+            Ok(())
+        })
+        .show();
 }
 
 /// Warns once that you are working while the reserve sits cold.
@@ -450,17 +497,26 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
     for acc in state.accounts() {
         let (name, letter, _) = config::presentation(cfg, &acc.email, acc.number);
         let mark = if acc.active { "●" } else { "○" };
-        let label = if acc.is_ok() {
-            format!("{mark} {name} ({letter}) — {}", usage_long(acc))
+        // A dead account is not worth switching to; what it needs is the
+        // re-login, so its entry opens the guide instead.
+        let (id, label, enabled) = if acc.is_ok() {
+            (
+                format!("switch:{}", acc.number),
+                format!("{mark} {name} ({letter}) — {}", usage_long(acc)),
+                !acc.active,
+            )
         } else {
-            format!("{mark} {name} ({letter}) — ⚠ {}", lang.relogin_tag())
+            (
+                format!("relogin:{}", acc.number),
+                format!(
+                    "{mark} {name} ({letter}) — ⚠ {} → {}",
+                    lang.relogin_tag(),
+                    lang.relogin_action()
+                ),
+                true,
+            )
         };
-        let _ = menu.append(&MenuItem::with_id(
-            format!("switch:{}", acc.number),
-            label,
-            !acc.active,
-            None,
-        ));
+        let _ = menu.append(&MenuItem::with_id(id, label, enabled, None));
     }
 
     let _ = menu.append(&PredefinedMenuItem::separator());

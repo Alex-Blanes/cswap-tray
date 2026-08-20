@@ -150,11 +150,16 @@ impl Default for Config {
     }
 }
 
-pub fn path() -> PathBuf {
+/// Everything the tray writes for itself lives here.
+pub fn dir() -> PathBuf {
     let base = std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
-    base.join("cswap-tray").join("config.json")
+    base.join("cswap-tray")
+}
+
+pub fn path() -> PathBuf {
+    dir().join("config.json")
 }
 
 /// Where the answer to a prewarm task is written, so it is work you receive
