@@ -173,6 +173,30 @@ ones show up in the file on their own.
 `refresh_seconds` is only the read cadence: cswap caches usage on disk, so
 polling does not trigger API calls.
 
+`relogin_console` is `false` by default. Set it to `true` and the moment an
+account's refresh token dies a console opens, tells you what it is about to do
+and **waits for a keypress**:
+
+```
+cswap switch <that account>   then   claude
+```
+
+The keypress is not decoration. The switch swaps the credential system-wide and
+drops any Claude Code session already running, so closing that window instead of
+pressing a key is a valid answer and changes nothing.
+
+The switch has to come first for two reasons: putting the dead credential in
+place is what makes Claude Code prompt for `/login`, and `cswap add` captures
+whichever credential is active at that moment — open Claude Code while another
+account is active and you re-capture the wrong one, leaving the dead account
+dead. That is the trap this saves you from.
+
+The capture is deliberately *not* chained onto `claude`. Chaining it with `&&`
+would hold it until you quit Claude Code, a step nobody guesses. The tray
+watches the credential store's timestamp instead and runs `cswap add` itself the
+moment the login lands, while you are still inside Claude Code. A toast confirms
+it. Fires once per account, on the same edge as the warning.
+
 ## How it is put together
 
 | File | Responsibility |

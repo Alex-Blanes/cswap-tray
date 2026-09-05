@@ -306,6 +306,37 @@ impl Lang {
             "Abre Claude Code en esa cuenta, usa /login y luego: cswap add"
         )
     }
+    /// Echoed into the re-login console before it waits for a keypress. cmd
+    /// eats `&`, `|`, `<`, `>`, `^` and `%`, so none of those may appear here.
+    pub fn relogin_warning(self, name: &str) -> String {
+        s!(
+            self,
+            format!(
+                "Re-login for {name}. Continuing switches the active account, \
+                 which disconnects any Claude Code session already running. \
+                 Close this window to leave everything as it is."
+            ),
+            format!(
+                "Reiniciar sesión de {name}. Al continuar se cambia la cuenta \
+                 activa, lo que desconecta cualquier sesión de Claude Code en \
+                 marcha. Cierra esta ventana para dejarlo todo como está."
+            )
+        )
+    }
+    pub fn relogin_done_title(self, name: &str) -> String {
+        s!(
+            self,
+            format!("{name}: session restored"),
+            format!("{name}: sesión restaurada")
+        )
+    }
+    pub fn relogin_done_body(self) -> &'static str {
+        s!(
+            self,
+            "The new credential was captured. The account is back in rotation.",
+            "Se ha capturado la credencial nueva. La cuenta vuelve a la rotación."
+        )
+    }
 
     // --- notifications -----------------------------------------------------
     pub fn toast_test(self) -> &'static str {

@@ -67,6 +67,7 @@ fn main() {
         armed: None,
         cold_notified: false,
         relogin_notified: std::collections::BTreeSet::new(),
+        relogin_pending: None,
     };
 
     let tray = TrayIconBuilder::new()
@@ -94,6 +95,10 @@ struct State {
     /// Accounts already warned about a dead token, so the toast fires on the
     /// transition and not on every poll.
     relogin_notified: std::collections::BTreeSet<u32>,
+    /// A re-login console is open and we are waiting for the login to land.
+    /// Holds the credential store's timestamp from before it opened: a newer
+    /// one is the evidence that there is something fresh to capture.
+    relogin_pending: Option<Option<std::time::SystemTime>>,
 }
 
 /// State of "send my next message through the reserve".
@@ -193,6 +198,7 @@ fn run_message_loop(
                     state.error = None;
                     // Prewarm wins: while it is armed the automatic policy must
                     // not move the account under our feet.
+                    capture_relogin(cfg, state, lang);
                     check_relogin(cfg, state, lang);
                     if state.armed.is_some() {
                         follow_up_prewarm(cfg, state, lang, cmd_tx);
@@ -302,19 +308,72 @@ fn notify(title: &str, body: &str) {
 /// symptom is an account silently dropping out of the rotation: auto-switch
 /// refuses it as a target and nothing on screen says why.
 fn check_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
-    let dead: Vec<(u32, String)> = state
+    let dead: Vec<(u32, String, String)> = state
         .accounts()
         .iter()
         .filter(|a| !a.is_ok())
-        .map(|a| (a.number, config::presentation(cfg, &a.email, a.number).0))
+        .map(|a| (a.number, config::presentation(cfg, &a.email, a.number).0, a.email.clone()))
         .collect();
-    for (number, name) in &dead {
+    for (number, name, email) in &dead {
         if state.relogin_notified.insert(*number) {
             notify(&lang.relogin_title(name), lang.relogin_body());
+            if cfg.relogin_console {
+                // Read the stamp *before* opening the window, so anything
+                // written from here on counts as the login we asked for.
+                state.relogin_pending = Some(cswap::login_stamp());
+                cswap::open_relogin(email, &lang.relogin_warning(name));
+            }
         }
     }
     // Recovered accounts re-arm the warning for next time.
-    state.relogin_notified.retain(|n| dead.iter().any(|(d, _)| d == n));
+    state.relogin_notified.retain(|n| dead.iter().any(|(d, ..)| d == n));
+    if dead.is_empty() {
+        state.relogin_pending = None;
+    }
+}
+
+/// Captures the credential once a login lands, so you never have to quit Claude
+/// Code for the repair to finish.
+///
+/// The evidence is the credential store being written after we opened the
+/// console. That also fires on an ordinary token refresh, which is harmless:
+/// `cswap add` matches by email, so the worst case is re-capturing a credential
+/// that was already correct, and an account still broken gets flagged again on
+/// the next poll.
+fn capture_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
+    let Some(before) = state.relogin_pending else {
+        return;
+    };
+    if !login_landed(before, cswap::login_stamp()) {
+        return;
+    }
+    state.relogin_pending = None;
+    match cswap::add_current() {
+        Ok(()) => {
+            let name = match state.accounts().iter().find(|a| a.active) {
+                Some(a) => config::presentation(cfg, &a.email, a.number).0,
+                None => String::new(),
+            };
+            // `relogin_notified` is deliberately left alone: the snapshot in
+            // hand still shows the account as dead, and clearing it here would
+            // make `check_relogin` open a second console on this very poll.
+            // The next snapshot drops the number on its own.
+            notify(&lang.relogin_done_title(&name), lang.relogin_done_body());
+        }
+        Err(e) => state.error = Some(e),
+    }
+}
+
+/// Whether the credential store was written since the console opened.
+///
+/// A store that cannot be read now proves nothing, so it is not a landing. One
+/// that was unreadable before and is readable now is: a first login writes the
+/// file that was not there.
+fn login_landed(
+    before: Option<std::time::SystemTime>,
+    now: Option<std::time::SystemTime>,
+) -> bool {
+    now.is_some() && now != before
 }
 
 /// Warns once that you are working while the reserve sits cold.
@@ -696,5 +755,17 @@ mod tests {
         let long = "x".repeat(300);
         assert_eq!(truncate(&long, TOOLTIP_MAX).chars().count(), TOOLTIP_MAX);
         assert_eq!(truncate("short", TOOLTIP_MAX), "short");
+    }
+
+    #[test]
+    fn a_login_lands_only_when_the_store_is_written() {
+        use std::time::{Duration, SystemTime};
+        let before = SystemTime::UNIX_EPOCH;
+        let after = before + Duration::from_secs(1);
+        assert!(login_landed(Some(before), Some(after)));
+        assert!(login_landed(None, Some(after)), "a first login creates the file");
+        assert!(!login_landed(Some(before), Some(before)), "untouched is not a landing");
+        assert!(!login_landed(Some(before), None), "an unreadable store proves nothing");
+        assert!(!login_landed(None, None));
     }
 }

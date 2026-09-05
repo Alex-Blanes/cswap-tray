@@ -178,6 +178,30 @@ aparecen solas en el fichero al detectarlas.
 `refresh_seconds` es solo la cadencia de lectura: cswap cachea el uso en disco,
 así que sondear no dispara llamadas a la API.
 
+`relogin_console` viene en `false`. Ponlo en `true` y, en cuanto caduque el
+token de una cuenta, se abre una consola que te dice lo que va a hacer y
+**espera a que pulses una tecla**:
+
+```
+cswap switch <esa cuenta>   y luego   claude
+```
+
+La tecla no es adorno. El switch cambia la credencial a nivel de sistema y tira
+cualquier sesión de Claude Code en marcha, así que cerrar esa ventana en vez de
+pulsar es una respuesta válida y no toca nada.
+
+El switch tiene que ir primero por dos motivos: poner la credencial muerta en su
+sitio es lo que hace que Claude Code pida `/login`, y `cswap add` captura la
+credencial que esté activa en ese momento — si abres Claude Code con otra cuenta
+activa recapturas la equivocada y dejas la muerta igual de muerta. Esa es la
+trampa que esto te evita.
+
+La captura **no** va encadenada a `claude`. Con `&&` no correría hasta que
+salieras de Claude Code, un paso que nadie adivina. En su lugar la bandeja vigila
+la fecha del almacén de credenciales y lanza `cswap add` ella misma en cuanto
+entra el login, contigo todavía dentro de Claude Code. Un aviso te lo confirma.
+Salta una vez por cuenta, en el mismo flanco que el aviso de caducidad.
+
 ## Cómo está montado
 
 | Fichero | Responsabilidad |

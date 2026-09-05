@@ -122,6 +122,11 @@ pub struct Config {
     /// polling does not imply API calls.
     #[serde(default = "default_refresh")]
     pub refresh_seconds: u64,
+    /// On a dead refresh token, open a console on Claude Code so `/login` is
+    /// one window away instead of a toast you dismiss and forget. Off by
+    /// default: an unasked-for window stealing focus is worse than the toast.
+    #[serde(default)]
+    pub relogin_console: bool,
     #[serde(default)]
     pub auto: AutoCfg,
     #[serde(default)]
@@ -143,6 +148,7 @@ impl Default for Config {
         Config {
             language: default_language(),
             refresh_seconds: default_refresh(),
+            relogin_console: false,
             auto: AutoCfg::default(),
             prewarm: PrewarmCfg::default(),
             accounts: BTreeMap::new(),

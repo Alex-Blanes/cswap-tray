@@ -300,10 +300,61 @@ pub fn run_task(number: u32, task: &str, out: &std::path::Path) -> Result<std::p
 
 /// Opens the interactive dashboard in a new console.
 pub fn open_tui() {
-    let _ = Command::new("cmd")
-        .args(["/c", "start", "", "cmd", "/k", exe(), "tui"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+    open_console(&["/k", exe(), "tui"]);
+}
+
+/// Opens a console that re-logs one account in, gated behind a keypress.
+///
+/// The gate is the point: the first thing the script runs is `cswap switch`,
+/// which swaps the credential **system-wide** and drops any Claude Code
+/// session already going. That is not something to do behind your back while
+/// you are mid-conversation, so the window opens, says what it is about to do
+/// and waits on `pause`. Closing it instead of pressing a key is a valid
+/// answer and costs nothing.
+///
+/// The switch still has to come first: putting the dead credential in place is
+/// what makes Claude Code prompt for `/login`. What is deliberately **not**
+/// chained here is the capture — `&& cswap add` would hold it until you quit
+/// Claude Code, a step nobody guesses. The tray watches for the login instead
+/// and calls [`add_current`] itself.
+///
+/// `cswap run` cannot stand in for the switch: it is process-scoped and `add`
+/// refuses to run inside one of its session shells.
+///
+/// `warning` is echoed verbatim, so it must not carry `&`, `|`, `<`, `>`, `^`
+/// or `%`: cmd would eat them.
+pub fn open_relogin(email: &str, warning: &str) {
+    let cswap = quoted_exe();
+    open_console(&["/k", &format!("echo {warning} && pause && {cswap} switch {email} && claude")]);
+}
+
+/// Captures the credential that is live right now into its own slot. `cswap
+/// add` matches by email, so a mistimed call refreshes whichever account is
+/// really logged in rather than corrupting the slot we meant.
+pub fn add_current() -> Result<(), String> {
+    run(&["add"]).map(|_| ())
+}
+
+/// When the resolved path carries a space, cmd needs it quoted.
+fn quoted_exe() -> String {
+    let exe = exe();
+    if exe.contains(' ') { format!("\"{exe}\"") } else { exe.to_string() }
+}
+
+/// Last write to Claude Code's credential store. Only the timestamp is read,
+/// never the contents: a change here is the evidence that a login landed.
+pub fn login_stamp() -> Option<std::time::SystemTime> {
+    let home = std::env::var("USERPROFILE").ok()?;
+    let store = PathBuf::from(home).join(".claude").join(".credentials.json");
+    std::fs::metadata(store).ok()?.modified().ok()
+}
+
+/// Spawns a visible `cmd` window. `start` is what detaches it from the tray;
+/// `CREATE_NO_WINDOW` only hides the throwaway shell that calls `start`.
+fn open_console(args: &[&str]) {
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/c", "start", "", "cmd"]).args(args);
+    let _ = cmd.creation_flags(CREATE_NO_WINDOW).spawn();
 }
 
 #[cfg(test)]
