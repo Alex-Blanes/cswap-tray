@@ -46,6 +46,13 @@ credencial nueva caiga en su hueco y no encima de la de una cuenta viva—,
 espera a que hagas el `/login`, la guarda y comprueba que la cuenta ha vuelto de
 verdad.
 
+No hace falta que salgas de Claude Code para cerrar el arreglo: la guía lanza su
+`cswap add` cuando `claude` termina, pero la bandeja se adelanta. Desde que abres
+la guía vigila la fecha del almacén de credenciales —solo la fecha, nunca el
+contenido— y en cuanto ve que ha entrado un login guarda el token ella misma y te
+avisa. La llamada de la guía se encuentra entonces el trabajo hecho y se limita a
+confirmarlo.
+
 Los porcentajes respetan la hora de reinicio. `cswap` solo refresca el uso
 cuando algo llama a la API, así que al llegar al tope la lectura se queda
 clavada en el 100 % mucho después de que la ventana se reinicie; cualquier

@@ -325,6 +325,21 @@ pub fn open_relogin_guide(dir: &std::path::Path, number: u32, email: &str, lang:
         .spawn();
 }
 
+/// Captures the credential that is live right now into its own slot. `cswap
+/// add` matches by email, so a mistimed call refreshes whichever account is
+/// really logged in rather than corrupting the slot we meant.
+pub fn add_current() -> Result<(), String> {
+    run(&["add"]).map(|_| ())
+}
+
+/// Last write to Claude Code's credential store. Only the timestamp is read,
+/// never the contents: a change here is the evidence that a login landed.
+pub fn login_stamp() -> Option<std::time::SystemTime> {
+    let home = std::env::var("USERPROFILE").ok()?;
+    let store = PathBuf::from(home).join(".claude").join(".credentials.json");
+    std::fs::metadata(store).ok()?.modified().ok()
+}
+
 /// Opens the interactive dashboard in a new console.
 pub fn open_tui() {
     let _ = Command::new("cmd")

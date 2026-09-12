@@ -16,8 +16,9 @@ mod i18n;
 mod icon;
 mod prewarm;
 
+use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use i18n::Lang;
 use tauri_winrt_notification::{Duration as ToastDuration, Toast};
@@ -212,6 +213,7 @@ fn run_message_loop(
                     state.error = None;
                     // Prewarm wins: while it is armed the automatic policy must
                     // not move the account under our feet.
+                    capture_relogin(cfg, state, lang);
                     check_relogin(cfg, state, lang);
                     if state.armed.is_some() {
                         follow_up_prewarm(cfg, state, lang, cmd_tx);
@@ -264,7 +266,7 @@ fn run_message_loop(
                     } else if let Some(n) = id.strip_prefix("relogin:").and_then(|n| n.parse::<u32>().ok())
                     {
                         if let Some(acc) = state.accounts().iter().find(|a| a.number == n) {
-                            cswap::open_relogin_guide(&config::dir(), n, &acc.email, lang.code());
+                            start_relogin_guide(n, &acc.email, lang.code());
                         }
                     } else if let Some(n) = id.strip_prefix("prefer:").and_then(|n| n.parse::<u32>().ok())
                     {
@@ -341,6 +343,12 @@ fn check_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
     }
     // Recovered accounts re-arm the warning for next time.
     state.relogin_notified.retain(|n| dead.iter().any(|(d, _, _)| d == n));
+    // Nothing dead left to repair, so a watcher still armed is a guide window
+    // that was closed without logging in. Disarm it, or the next ordinary
+    // token refresh would look like our landing.
+    if dead.is_empty() {
+        disarm_relogin();
+    }
 }
 
 /// The "session expired" toast. Clicking it — body or button — opens the
@@ -358,10 +366,85 @@ fn notify_relogin(lang: Lang, number: u32, name: &str, email: &str) {
         // Long, not Short: five seconds is not enough to react to it.
         .duration(ToastDuration::Long)
         .on_activated(move |_| {
-            cswap::open_relogin_guide(&config::dir(), number, &mail, code);
+            start_relogin_guide(number, &mail, code);
             Ok(())
         })
         .show();
+}
+
+/// Armed when a guided re-login opens, holding the credential store's stamp
+/// from that moment. The outer `None` means "not watching"; `Some(None)` means
+/// "watching, and the store was unreadable then" — which a first login turns
+/// into a landing by creating the file.
+///
+/// A static rather than a field on `State` because the toast's `on_activated`
+/// fires on Windows' own thread, not the poll loop that owns `State`.
+static RELOGIN_PENDING: Mutex<Option<Option<SystemTime>>> = Mutex::new(None);
+
+/// Opens the guided re-login and starts watching for the login in one move, so
+/// no call site can open the guide and forget to record the "before" stamp.
+///
+/// The stamp is read *before* the window opens: anything written from here on
+/// counts as the login we asked for.
+fn start_relogin_guide(number: u32, email: &str, lang_code: &'static str) {
+    if let Ok(mut pending) = RELOGIN_PENDING.lock() {
+        *pending = Some(cswap::login_stamp());
+    }
+    cswap::open_relogin_guide(&config::dir(), number, email, lang_code);
+}
+
+fn disarm_relogin() {
+    if let Ok(mut pending) = RELOGIN_PENDING.lock() {
+        *pending = None;
+    }
+}
+
+/// Saves the new credential the moment a login lands, so the repair finishes
+/// without you quitting Claude Code first.
+///
+/// The guide runs `cswap add` too, but only after `claude` exits — and nobody
+/// quits Claude Code just to bank a token. This gets there first; the guide's
+/// own call then finds the work already done and simply confirms it.
+///
+/// The evidence is the credential store being written after the guide opened.
+/// That also fires on an ordinary token refresh, which is harmless: `cswap add`
+/// matches by email, so the worst case is re-capturing a credential that was
+/// already correct, and an account still broken is flagged again next poll.
+fn capture_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
+    let armed = match RELOGIN_PENDING.lock() {
+        Ok(pending) => *pending,
+        Err(_) => return,
+    };
+    let Some(before) = armed else {
+        return;
+    };
+    if !login_landed(before, cswap::login_stamp()) {
+        return;
+    }
+    disarm_relogin();
+    match cswap::add_current() {
+        Ok(()) => {
+            let name = match state.accounts().iter().find(|a| a.active) {
+                Some(a) => config::presentation(cfg, &a.email, a.number).0,
+                None => String::new(),
+            };
+            // `relogin_notified` is deliberately left alone: the snapshot in
+            // hand still shows the account as dead, and clearing it here would
+            // make `check_relogin` fire a second toast on this very poll. The
+            // next snapshot drops the number on its own.
+            notify(&lang.relogin_done_title(&name), lang.relogin_done_body());
+        }
+        Err(e) => state.error = Some(e),
+    }
+}
+
+/// Whether the credential store was written since the guide opened.
+///
+/// A store that cannot be read now proves nothing, so it is not a landing. One
+/// that was unreadable before and is readable now is: a first login writes the
+/// file that was not there.
+fn login_landed(before: Option<SystemTime>, now: Option<SystemTime>) -> bool {
+    now.is_some() && now != before
 }
 
 /// Warns once that you are working while the reserve sits cold.
@@ -752,5 +835,16 @@ mod tests {
         let long = "x".repeat(300);
         assert_eq!(truncate(&long, TOOLTIP_MAX).chars().count(), TOOLTIP_MAX);
         assert_eq!(truncate("short", TOOLTIP_MAX), "short");
+    }
+
+    #[test]
+    fn a_login_lands_only_when_the_store_is_written() {
+        let before = SystemTime::UNIX_EPOCH;
+        let after = before + Duration::from_secs(1);
+        assert!(login_landed(Some(before), Some(after)));
+        assert!(login_landed(None, Some(after)), "a first login creates the file");
+        assert!(!login_landed(Some(before), Some(before)), "untouched is not a landing");
+        assert!(!login_landed(Some(before), None), "an unreadable store proves nothing");
+        assert!(!login_landed(None, None));
     }
 }

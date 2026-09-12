@@ -317,6 +317,23 @@ impl Lang {
         s!(self, "en", "es")
     }
 
+    /// Fired when the tray captures the new credential on its own, so the
+    /// repair reports itself without you going back to the guide's window.
+    pub fn relogin_done_title(self, name: &str) -> String {
+        s!(
+            self,
+            format!("{name}: session restored"),
+            format!("{name}: sesión restaurada")
+        )
+    }
+    pub fn relogin_done_body(self) -> &'static str {
+        s!(
+            self,
+            "The new credential was captured. The account is back in rotation.",
+            "Se ha capturado la credencial nueva. La cuenta vuelve a la rotación."
+        )
+    }
+
     // --- notifications -----------------------------------------------------
     pub fn toast_test(self) -> &'static str {
         s!(self, "Notifications work.", "Los avisos funcionan.")

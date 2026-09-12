@@ -44,6 +44,13 @@ Otherwise it makes the account active first — so the new credential lands in
 that slot instead of over a live account's — waits while you do the `/login`,
 saves it, and checks the account actually came back.
 
+You do not have to quit Claude Code for the repair to finish: the guide runs its
+own `cswap add` once `claude` exits, but the tray gets there first. From the
+moment the guide opens it watches the credential store's timestamp — the
+timestamp only, never the contents — and the instant a login lands it saves the
+token itself and tells you. The guide's own call then finds the work already
+done and just confirms it.
+
 Percentages honour the reset time. `cswap` refreshes usage only when something
 asks the API, so after hitting the cap a reading stays pinned at 100% long past
 the window rolling over; any window whose reset has passed is read as 0%.
