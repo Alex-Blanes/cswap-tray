@@ -91,6 +91,20 @@ impl Lang {
     pub fn auto_off(self) -> &'static str {
         s!(self, "Auto-switch: off", "Cambio automático: desactivado")
     }
+    pub fn auto_switched_title(self, from: &str, to: &str) -> String {
+        s!(
+            self,
+            format!("Auto-switch: {from} → {to}"),
+            format!("Cambio automático: {from} → {to}")
+        )
+    }
+    pub fn auto_switched_body(self, from: &str, pct: f32) -> String {
+        s!(
+            self,
+            format!("{from} was at {pct:.0}% of its quota."),
+            format!("{from} estaba al {pct:.0}% de su cuota.")
+        )
+    }
     pub fn enable(self) -> &'static str {
         s!(self, "Enable", "Activar")
     }

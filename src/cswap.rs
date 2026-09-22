@@ -81,6 +81,17 @@ impl Account {
     pub fn is_ok(&self) -> bool {
         self.usage_status.is_empty() || self.usage_status == "ok"
     }
+
+    /// The refresh token is dead and only a new login brings the account back.
+    ///
+    /// Narrower than `!is_ok()` on purpose. cswap also reports `token_expired`
+    /// ("retries automatically"), `foreign_credential` ("a switch repairs it",
+    /// routine for a poll or two around every switch) and `unavailable` (the
+    /// fetch failed). Treating those as expired sessions fired a re-login toast
+    /// on healthy accounts every time auto-switch moved.
+    pub fn needs_relogin(&self) -> bool {
+        self.usage_status == "relogin_required"
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -417,5 +428,22 @@ mod tests {
         assert_eq!(acc.pct(Win::FiveHour), Some(0.0));
         assert_eq!(acc.pct(Win::SevenDay), Some(11.0));
         assert_eq!(acc.binding_pct(), Some(11.0));
+    }
+
+    #[test]
+    fn only_a_dead_refresh_token_asks_for_a_login() {
+        let with = |status: &str| -> Account {
+            serde_json::from_str(&format!(
+                r#"{{"number":1,"email":"a@x.com","active":false,"usageStatus":"{status}"}}"#
+            ))
+            .unwrap()
+        };
+        assert!(with("relogin_required").needs_relogin());
+        // Transient states cswap repairs by itself: unusable as a target, but
+        // no reason to send you through a login.
+        for status in ["ok", "token_expired", "foreign_credential", "unavailable", "keychain_unavailable"] {
+            assert!(!with(status).needs_relogin(), "{status} must not ask for a login");
+        }
+        assert!(!with("token_expired").is_ok());
     }
 }

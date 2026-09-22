@@ -218,7 +218,7 @@ fn run_message_loop(
                     if state.armed.is_some() {
                         follow_up_prewarm(cfg, state, lang, cmd_tx);
                     } else {
-                        apply_auto_policy(cfg, state, cmd_tx);
+                        apply_auto_policy(cfg, state, lang, cmd_tx);
                         check_cold_reserve(cfg, state, lang);
                     }
                 }
@@ -244,7 +244,7 @@ fn run_message_loop(
                     config::save(cfg);
                     // Once switched on, let it act right away if it applies.
                     state.last_auto_switch = None;
-                    apply_auto_policy(cfg, state, cmd_tx);
+                    apply_auto_policy(cfg, state, lang, cmd_tx);
                     dirty = true;
                 }
                 "prewarm:output" => open_path(&config::prewarm_output_path()),
@@ -301,7 +301,7 @@ fn run_message_loop(
 /// Evaluates the auto-switch policy against the latest snapshot and orders the
 /// switch when it applies. The cooldown lives here so the decision itself
 /// (`auto::decide`) stays a pure, testable function.
-fn apply_auto_policy(cfg: &config::Config, state: &mut State, cmd_tx: &Sender<Cmd>) {
+fn apply_auto_policy(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx: &Sender<Cmd>) {
     if !cfg.auto.enabled {
         return;
     }
@@ -312,6 +312,14 @@ fn apply_auto_policy(cfg: &config::Config, state: &mut State, cmd_tx: &Sender<Cm
     if let Some(target) = auto::decide(&cfg.auto, state.accounts()) {
         state.last_auto_switch = Some(Instant::now());
         let _ = cmd_tx.send(Cmd::Switch(Some(target)));
+        // Without this the switch is silent, and a policy that moves you
+        // around unannounced reads as one that does nothing at all.
+        if let Some(from) = state.active() {
+            let pct = from.binding_pct().unwrap_or(0.0);
+            let from = config::presentation(cfg, &from.email, from.number).0;
+            let to = state.name_of(cfg, lang, target);
+            notify(&lang.auto_switched_title(&from, &to), &lang.auto_switched_body(&from, pct));
+        }
     }
 }
 
@@ -331,7 +339,7 @@ fn check_relogin(cfg: &config::Config, state: &mut State, lang: Lang) {
     let dead: Vec<(u32, String, String)> = state
         .accounts()
         .iter()
-        .filter(|a| !a.is_ok())
+        .filter(|a| a.needs_relogin())
         .map(|a| {
             (a.number, config::presentation(cfg, &a.email, a.number).0, a.email.clone())
         })
@@ -540,7 +548,7 @@ fn follow_up_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
 }
 
 fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
-    let alert = state.accounts().iter().any(|a| !a.is_ok());
+    let alert = state.accounts().iter().any(|a| a.needs_relogin());
     let spec = match state.active() {
         Some(acc) => {
             let (_, letter, color) = config::presentation(cfg, &acc.email, acc.number);
@@ -582,7 +590,7 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
         let mark = if acc.active { "●" } else { "○" };
         // A dead account is not worth switching to; what it needs is the
         // re-login, so its entry opens the guide instead.
-        let (id, label, enabled) = if acc.is_ok() {
+        let (id, label, enabled) = if !acc.needs_relogin() {
             (
                 format!("switch:{}", acc.number),
                 format!("{mark} {name} ({letter}) — {}", usage_long(acc)),
