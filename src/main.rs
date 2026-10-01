@@ -92,6 +92,9 @@ fn main() {
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(Menu::new()))
         .with_menu_on_left_click(false)
+        // The menu is built when it is about to be shown, so the tray opens it
+        // itself rather than on the shell's right click. See `show_fresh_menu`.
+        .with_menu_on_right_click(false)
         .with_tooltip(lang.loading())
         .with_icon(make_icon(&cfg, &state, icon_size))
         .build()
@@ -281,19 +284,23 @@ fn run_message_loop(
         }
 
         while let Ok(event) = tray_events.try_recv() {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event
-            {
-                // With two accounts this toggles; with more, it advances in order.
-                if state.accounts().len() > 1 {
-                    let _ = cmd_tx.send(Cmd::Switch(None));
+            match event {
+                TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
+                    // With two accounts this toggles; with more, it advances in order.
+                    if state.accounts().len() > 1 {
+                        let _ = cmd_tx.send(Cmd::Switch(None));
+                    }
                 }
+                TrayIconEvent::Click { button: MouseButton::Right, button_state: MouseButtonState::Up, .. } => {
+                    show_fresh_menu(tray, cfg, state, lang);
+                }
+                _ => {}
             }
         }
 
         if dirty {
             let _ = tray.set_icon(Some(make_icon(cfg, state, icon_size)));
             let _ = tray.set_tooltip(Some(tooltip(cfg, state, lang)));
-            tray.set_menu(Some(Box::new(build_menu(cfg, state, lang))));
         }
     }
 }
@@ -571,6 +578,24 @@ fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
         },
     };
     Icon::from_rgba(icon::render(&spec, size), size, size).expect("invalid icon buffer")
+}
+
+/// Builds the menu from the latest snapshot and opens it.
+///
+/// Building on demand rather than on every poll is not a refinement, it is the
+/// fix for a tray whose menu went dead after half a day up. `muda` hands each
+/// item it creates an id from a counter that never reuses a value, and Windows
+/// delivers only the low 16 bits of that id in `WM_COMMAND`. Rebuilding the
+/// whole menu twice a minute burned through the 65 535 usable ids in about
+/// twelve hours, after which no click could be matched to its item and every
+/// entry silently did nothing.
+///
+/// ponytail: still finite — roughly a thousand openings per run. If that is
+/// ever reached, the real cure is updating the existing items in place instead
+/// of recreating them, which costs stable handles for every dynamic label.
+fn show_fresh_menu(tray: &TrayIcon, cfg: &config::Config, state: &State, lang: Lang) {
+    tray.set_menu(Some(Box::new(build_menu(cfg, state, lang))));
+    tray.show_menu();
 }
 
 fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
