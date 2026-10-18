@@ -57,6 +57,17 @@ pub fn decide(cfg: &AutoCfg, accounts: &[Account]) -> Option<u32> {
         .map(|a| a.number)
 }
 
+/// Whether there is nowhere left to go: every account spent, and every reading
+/// trustworthy. Both halves matter — this is what sends work to a paid API, so
+/// a single account whose usage could not be read means "stay put" rather than
+/// "start spending". See `deepseek.rs`.
+pub fn everything_spent(cfg: &AutoCfg, accounts: &[Account]) -> bool {
+    !accounts.is_empty()
+        && accounts.iter().all(|a| {
+            a.is_ok() && a.binding_pct().is_some_and(|p| p >= cfg.switch_at_pct)
+        })
+}
+
 /// An account works as a target when it reports reliable usage and sits below
 /// the given limit.
 fn usable(acc: &Account, below_pct: f32) -> bool {
@@ -127,6 +138,27 @@ mod tests {
     fn stays_when_every_account_is_exhausted() {
         let accs = accounts(&[(1, "personal@x.com", true, 100.0, 63.0), (2, "work@x.com", false, 99.0, 90.0)]);
         assert_eq!(decide(&cfg(), &accs), None);
+    }
+
+    #[test]
+    fn everything_spent_needs_every_account_spent_and_readable() {
+        let spent = accounts(&[(1, "a@x.com", true, 100.0, 63.0), (2, "b@x.com", false, 95.0, 90.0)]);
+        assert!(everything_spent(&cfg(), &spent));
+
+        let room = accounts(&[(1, "a@x.com", true, 100.0, 63.0), (2, "b@x.com", false, 10.0, 10.0)]);
+        assert!(!everything_spent(&cfg(), &room));
+
+        // One unreadable account is enough to hold back: paying for API calls
+        // on the strength of a failed usage fetch is the wrong default.
+        let blind: Vec<Account> = serde_json::from_str(
+            r#"[{"number":1,"email":"a@x.com","active":true,"usageStatus":"ok",
+                 "usage":{"fiveHour":{"pct":100.0},"sevenDay":{"pct":99.0}}},
+                {"number":2,"email":"b@x.com","active":false,"usageStatus":"unavailable"}]"#,
+        )
+        .unwrap();
+        assert!(!everything_spent(&cfg(), &blind));
+
+        assert!(!everything_spent(&cfg(), &[]));
     }
 
     #[test]

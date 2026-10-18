@@ -105,6 +105,50 @@ impl Lang {
             format!("{from} estaba al {pct:.0}% de su cuota.")
         )
     }
+    // --- DeepSeek ----------------------------------------------------------
+    pub fn deepseek_label(self) -> &'static str {
+        s!(self, "DeepSeek (API, pay per use)", "DeepSeek (API, pago por uso)")
+    }
+    pub fn deepseek_on_title(self) -> &'static str {
+        s!(self, "DeepSeek is now active", "DeepSeek activado")
+    }
+    pub fn deepseek_on_body(self) -> &'static str {
+        s!(
+            self,
+            "Open a new Claude Code session: the model variables only apply at startup. Everything runs on deepseek-flash and is billed per use.",
+            "Abre una sesión nueva de Claude Code: las variables de modelo solo se leen al arrancar. Todo va por deepseek-flash y se factura por uso."
+        )
+    }
+    pub fn deepseek_off_title(self) -> &'static str {
+        s!(self, "DeepSeek off", "DeepSeek desactivado")
+    }
+    pub fn deepseek_off_body(self, name: &str) -> String {
+        s!(
+            self,
+            format!("Back on the subscription ({name}). Open a new session to drop the model variables."),
+            format!("De vuelta a la suscripción ({name}). Abre una sesión nueva para soltar las variables de modelo.")
+        )
+    }
+    pub fn deepseek_no_key_title(self) -> &'static str {
+        s!(self, "No DeepSeek key", "Sin clave de DeepSeek")
+    }
+    pub fn deepseek_no_key_body(self) -> &'static str {
+        s!(
+            self,
+            "Not switching: without a key Claude Code would send the subscription token to api.deepseek.com. Store it with deepseek-key.py set.",
+            "No cambio: sin clave, Claude Code mandaría el token de la suscripción a api.deepseek.com. Guárdala con deepseek-key.py set."
+        )
+    }
+    pub fn deepseek_fallback_title(self) -> &'static str {
+        s!(self, "Every account spent → DeepSeek", "Cuotas agotadas → DeepSeek")
+    }
+    pub fn deepseek_fallback_body(self) -> &'static str {
+        s!(
+            self,
+            "Last resort: now billing per use. It returns to the subscription as soon as an account recovers.",
+            "Último recurso: ahora se paga por uso. Vuelve a la suscripción en cuanto una cuenta recupere."
+        )
+    }
     pub fn enable(self) -> &'static str {
         s!(self, "Enable", "Activar")
     }

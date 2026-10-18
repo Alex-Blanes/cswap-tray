@@ -113,6 +113,36 @@ impl Default for PrewarmCfg {
     }
 }
 
+/// DeepSeek's paid API as one more account. Off unless `script` points at the
+/// helper that prints the key, so the feature does not exist for anyone who
+/// has not set it up. See `deepseek.rs`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DeepSeekCfg {
+    /// Interpreter for the helper. Empty means "python" on PATH.
+    #[serde(default)]
+    pub python: String,
+    /// Full path to `deepseek-key.py`. Empty disables the whole feature.
+    #[serde(default)]
+    pub script: String,
+    /// Let auto-switch fall back to DeepSeek when every subscription is spent.
+    /// This is the one setting that can start spending money on its own.
+    #[serde(default = "yes")]
+    pub fallback: bool,
+}
+
+impl DeepSeekCfg {
+    pub fn available(&self) -> bool {
+        !self.script.trim().is_empty()
+    }
+    pub fn python(&self) -> &str {
+        if self.python.trim().is_empty() { "python" } else { self.python.trim() }
+    }
+    /// The command Claude Code runs as `apiKeyHelper`.
+    pub fn helper(&self) -> String {
+        format!("{} {} get", self.python(), self.script.trim())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// UI language: "auto" (follow Windows), "en" or "es".
@@ -126,6 +156,8 @@ pub struct Config {
     pub auto: AutoCfg,
     #[serde(default)]
     pub prewarm: PrewarmCfg,
+    #[serde(default)]
+    pub deepseek: DeepSeekCfg,
     /// Key: the account email exactly as cswap reports it.
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountCfg>,
@@ -145,6 +177,7 @@ impl Default for Config {
             refresh_seconds: default_refresh(),
             auto: AutoCfg::default(),
             prewarm: PrewarmCfg::default(),
+            deepseek: DeepSeekCfg::default(),
             accounts: BTreeMap::new(),
         }
     }

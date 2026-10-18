@@ -118,6 +118,45 @@ without it, an account hovering around the threshold would flap constantly.
 > other account without warning. That is the point of turning it on, but it is
 > worth knowing: it mixes personal and work spend.
 
+## DeepSeek as a last resort
+
+Optional, off unless you fill it in, and the only part of the tray that can
+spend money. DeepSeek serves an Anthropic-compatible API, so Claude Code can
+talk to it without changing anything else.
+
+```json
+"deepseek": {
+  "python": "C:/Python313/python.exe",
+  "script": "C:/path/to/deepseek-key.py",
+  "fallback": true
+}
+```
+
+`script` points at a helper of your own that prints the API key on stdout when
+run as `<python> <script> get`, and exits non-zero when there is no key. With
+`script` empty the feature does not exist: no menu entry, no fallback. Keep the
+key in the Windows credential manager or another store — never in a file the
+tray or the repository can read.
+
+Switching it on patches `~/.claude/settings.json`: `apiKeyHelper` plus the
+`env` entries for the base URL and the model names, all in one atomic write.
+Switching it off removes exactly those. Your other settings are untouched, and
+an `apiKeyHelper` that is not this one is left alone.
+
+- **Open a new session afterwards.** The model variables are only read at
+  startup, so an already-running session would keep asking for Claude models.
+- **Everything runs on `deepseek-flash`.** Without pinning the model names,
+  Claude Code sends `claude-opus-*`, which DeepSeek maps to its Pro tier.
+- **With no key it refuses to switch on.** A helper that prints nothing would
+  leave Claude Code using your OAuth token against `api.deepseek.com` — that
+  is, handing your subscription token to a third party.
+- **`fallback`** lets auto-switch go to DeepSeek when every account is spent,
+  and only then: a single unreadable usage figure holds it back. It returns to
+  the subscription the moment an account recovers, because any account switch
+  turns DeepSeek off first.
+- Prompt caching, PDF reading, claude.ai connectors and `/schedule` do not work
+  against DeepSeek.
+
 ## Prewarming the reserve
 
 An account's 5h window **is opened by its first message** — not by the login or

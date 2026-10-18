@@ -12,6 +12,7 @@
 mod auto;
 mod config;
 mod cswap;
+mod deepseek;
 mod i18n;
 mod icon;
 mod prewarm;
@@ -87,6 +88,7 @@ fn main() {
         armed: None,
         cold_notified: false,
         relogin_notified: std::collections::BTreeSet::new(),
+        deepseek: deepseek::is_on(),
     };
 
     let tray = TrayIconBuilder::new()
@@ -117,6 +119,9 @@ struct State {
     /// Accounts already warned about a dead token, so the toast fires on the
     /// transition and not on every poll.
     relogin_notified: std::collections::BTreeSet<u32>,
+    /// Whether DeepSeek's API is overriding the subscription. Re-read from
+    /// `settings.json` on every poll, because the user can edit that by hand.
+    deepseek: bool,
 }
 
 /// State of "send my next message through the reserve".
@@ -214,6 +219,7 @@ fn run_message_loop(
                     }
                     state.snapshot = Some(snap);
                     state.error = None;
+                    state.deepseek = deepseek::is_on();
                     // Prewarm wins: while it is armed the automatic policy must
                     // not move the account under our feet.
                     capture_relogin(cfg, state, lang);
@@ -237,8 +243,22 @@ fn run_message_loop(
                 "refresh" => {
                     let _ = cmd_tx.send(Cmd::Refresh);
                 }
-                "rotate" => {
-                    let _ = cmd_tx.send(Cmd::Switch(None));
+                "rotate" => order_switch(cfg, state, lang, cmd_tx, None),
+                "deepseek:on" => {
+                    if set_deepseek(cfg, state, lang, true) {
+                        notify(lang.deepseek_on_title(), lang.deepseek_on_body());
+                    }
+                    dirty = true;
+                }
+                "deepseek:off" => {
+                    if set_deepseek(cfg, state, lang, false) {
+                        let back = match state.active() {
+                            Some(a) => config::presentation(cfg, &a.email, a.number).0,
+                            None => String::new(),
+                        };
+                        notify(lang.deepseek_off_title(), &lang.deepseek_off_body(&back));
+                    }
+                    dirty = true;
                 }
                 "tui" => cswap::open_tui(),
                 "config" => open_config(),
@@ -253,7 +273,7 @@ fn run_message_loop(
                 "prewarm:output" => open_path(&config::prewarm_output_path()),
                 "prewarm:cancel" => {
                     if let Some(armed) = state.armed.take() {
-                        let _ = cmd_tx.send(Cmd::Switch(Some(armed.back_to)));
+                        order_switch(cfg, state, lang, cmd_tx, Some(armed.back_to));
                     }
                     dirty = true;
                 }
@@ -265,7 +285,8 @@ fn run_message_loop(
                     {
                         run_prewarm_task(cfg, state, lang, n);
                     } else if let Some(n) = id.strip_prefix("switch:").and_then(|n| n.parse().ok()) {
-                        let _ = cmd_tx.send(Cmd::Switch(Some(n)));
+                        order_switch(cfg, state, lang, cmd_tx, Some(n));
+                        dirty = true;
                     } else if let Some(n) = id.strip_prefix("relogin:").and_then(|n| n.parse::<u32>().ok())
                     {
                         if let Some(acc) = state.accounts().iter().find(|a| a.number == n) {
@@ -288,7 +309,8 @@ fn run_message_loop(
                 TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
                     // With two accounts this toggles; with more, it advances in order.
                     if state.accounts().len() > 1 {
-                        let _ = cmd_tx.send(Cmd::Switch(None));
+                        order_switch(cfg, state, lang, cmd_tx, None);
+                        dirty = true;
                     }
                 }
                 TrayIconEvent::Click { button: MouseButton::Right, button_state: MouseButtonState::Up, .. } => {
@@ -316,18 +338,73 @@ fn apply_auto_policy(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
     if state.last_auto_switch.is_some_and(|t| t.elapsed() < cooldown) {
         return;
     }
-    if let Some(target) = auto::decide(&cfg.auto, state.accounts()) {
-        state.last_auto_switch = Some(Instant::now());
-        let _ = cmd_tx.send(Cmd::Switch(Some(target)));
-        // Without this the switch is silent, and a policy that moves you
-        // around unannounced reads as one that does nothing at all.
-        if let Some(from) = state.active() {
-            let pct = from.binding_pct().unwrap_or(0.0);
-            let from = config::presentation(cfg, &from.email, from.number).0;
-            let to = state.name_of(cfg, lang, target);
-            notify(&lang.auto_switched_title(&from, &to), &lang.auto_switched_body(&from, pct));
+    let Some(target) = auto::decide(&cfg.auto, state.accounts()) else {
+        // Nowhere left to go on the subscriptions. DeepSeek is the last
+        // resort, and this is the only place the tray starts spending money on
+        // its own — hence the `fallback` setting guarding it, and hence
+        // `everything_spent` refusing to act on a usage reading it could not
+        // trust. Coming back needs nothing special: the moment an account
+        // recovers, `decide` returns it and every switch turns DeepSeek off.
+        if cfg.deepseek.available()
+            && cfg.deepseek.fallback
+            && !state.deepseek
+            && auto::everything_spent(&cfg.auto, state.accounts())
+        {
+            state.last_auto_switch = Some(Instant::now());
+            if set_deepseek(cfg, state, lang, true) {
+                notify(lang.deepseek_fallback_title(), lang.deepseek_fallback_body());
+            }
         }
+        return;
+    };
+    state.last_auto_switch = Some(Instant::now());
+    // Worked out before the order goes out: a policy that moves you around
+    // unannounced reads as one that does nothing at all.
+    let note = state.active().map(|from| {
+        let pct = from.binding_pct().unwrap_or(0.0);
+        let name = config::presentation(cfg, &from.email, from.number).0;
+        let to = state.name_of(cfg, lang, target);
+        (lang.auto_switched_title(&name, &to), lang.auto_switched_body(&name, pct))
+    });
+    order_switch(cfg, state, lang, cmd_tx, Some(target));
+    if let Some((title, body)) = note {
+        notify(&title, &body);
     }
+}
+
+/// Every account change goes through here. DeepSeek's `apiKeyHelper` outranks
+/// the OAuth login that cswap manages, so switching account while it is on
+/// would change nothing you could see.
+fn order_switch(
+    cfg: &config::Config,
+    state: &mut State,
+    lang: Lang,
+    cmd_tx: &Sender<Cmd>,
+    target: Option<u32>,
+) {
+    if state.deepseek {
+        set_deepseek(cfg, state, lang, false);
+    }
+    let _ = cmd_tx.send(Cmd::Switch(target));
+}
+
+/// Flips DeepSeek on or off, reporting whether it took. The caller does the
+/// talking, because the reason for the change is the interesting part.
+///
+/// Turning it on without a key is refused rather than attempted: the helper
+/// would print nothing, Claude Code would fall back to the OAuth token, and
+/// the base URL would hand that token to api.deepseek.com.
+fn set_deepseek(cfg: &config::Config, state: &mut State, lang: Lang, on: bool) -> bool {
+    if on && !deepseek::key_available(cfg.deepseek.python(), cfg.deepseek.script.trim()) {
+        notify(lang.deepseek_no_key_title(), lang.deepseek_no_key_body());
+        return false;
+    }
+    if let Err(e) = deepseek::set(on, &cfg.deepseek.helper()) {
+        state.error = Some(e);
+        return false;
+    }
+    state.deepseek = on;
+    true
 }
 
 /// Fires a Windows notification. Failures are ignored: it is informational.
@@ -498,7 +575,7 @@ fn arm_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx: &Sen
     let name = state.name_of(cfg, lang, target);
 
     state.armed = Some(Armed { target, back_to, had_window, base_pct, since: Instant::now() });
-    let _ = cmd_tx.send(Cmd::Switch(Some(target)));
+    order_switch(cfg, state, lang, cmd_tx, Some(target));
     notify(&lang.prewarming_title(&name), lang.prewarming_body());
 }
 
@@ -541,7 +618,7 @@ fn follow_up_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
     let back_to = armed.back_to;
     state.armed = None;
     state.cold_notified = false;
-    let _ = cmd_tx.send(Cmd::Switch(Some(back_to)));
+    order_switch(cfg, state, lang, cmd_tx, Some(back_to));
 
     let back_name = state.name_of(cfg, lang, back_to);
     if landed {
@@ -556,6 +633,19 @@ fn follow_up_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
 
 fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
     let alert = state.accounts().iter().any(|a| a.needs_relogin());
+    // DeepSeek has no quota windows to draw, and it is what the session is
+    // actually talking to, so it takes the icon over the active account.
+    if state.deepseek {
+        let spec = icon::IconSpec {
+            letter: 'D',
+            color: [77, 107, 254],
+            five_hour: None,
+            seven_day: None,
+            stale: false,
+            alert,
+        };
+        return Icon::from_rgba(icon::render(&spec, size), size, size).expect("invalid icon buffer");
+    }
     let spec = match state.active() {
         Some(acc) => {
             let (_, letter, color) = config::presentation(cfg, &acc.email, acc.number);
@@ -633,6 +723,17 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
             )
         };
         let _ = menu.append(&MenuItem::with_id(id, label, enabled, None));
+    }
+
+    if cfg.deepseek.available() {
+        let mark = if state.deepseek { "●" } else { "○" };
+        let id = if state.deepseek { "deepseek:off" } else { "deepseek:on" };
+        let _ = menu.append(&MenuItem::with_id(
+            id,
+            format!("{mark} {} (D)", lang.deepseek_label()),
+            true,
+            None,
+        ));
     }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
@@ -824,6 +925,9 @@ fn tooltip(cfg: &config::Config, state: &State, lang: Lang) -> String {
         return truncate(&format!("cswap-tray: {err}"), TOOLTIP_MAX);
     }
     let mut lines: Vec<String> = Vec::new();
+    if state.deepseek {
+        lines.push(format!("● {}", lang.deepseek_label()));
+    }
     // Active account first: it is the one the icon stands for.
     let mut ordered: Vec<&cswap::Account> = state.accounts().iter().collect();
     ordered.sort_by_key(|a| !a.active);

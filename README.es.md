@@ -121,6 +121,46 @@ una cuenta rondando el umbral provocaría un ida y vuelta continuo.
 > contra la otra cuenta sin avisar. Es lo que se busca al activarlo, pero
 > conviene saberlo: mezcla el gasto personal y el de trabajo.
 
+## DeepSeek como último recurso
+
+Opcional, apagado si no lo rellenas, y la única parte de la bandeja que puede
+gastar dinero. DeepSeek sirve una API compatible con la de Anthropic, así que
+Claude Code puede hablar con ella sin cambiar nada más.
+
+```json
+"deepseek": {
+  "python": "C:/Python313/python.exe",
+  "script": "C:/ruta/a/deepseek-key.py",
+  "fallback": true
+}
+```
+
+`script` apunta a un ayudante tuyo que imprime la clave de la API por stdout al
+ejecutarlo como `<python> <script> get`, y sale con código distinto de cero si
+no hay clave. Con `script` vacío la función no existe: ni entrada en el menú ni
+recurso automático. Guarda la clave en el administrador de credenciales de
+Windows o en otro almacén — nunca en un fichero que puedan leer la bandeja o el
+repositorio.
+
+Al activarlo se parchea `~/.claude/settings.json`: `apiKeyHelper` más las
+entradas de `env` con la URL base y los nombres de modelo, todo en una sola
+escritura atómica. Al desactivarlo se quitan exactamente esas. El resto de tus
+ajustes no se toca, y un `apiKeyHelper` que no sea este se queda como está.
+
+- **Abre una sesión nueva después.** Las variables de modelo solo se leen al
+  arrancar, así que una sesión ya en marcha seguiría pidiendo modelos de Claude.
+- **Todo va por `deepseek-flash`.** Sin fijar los nombres de modelo, Claude Code
+  manda `claude-opus-*`, que DeepSeek traduce a su tarifa Pro.
+- **Sin clave se niega a activarse.** Un ayudante que no imprime nada dejaría a
+  Claude Code usando tu token de OAuth contra `api.deepseek.com`: es decir,
+  entregando el token de tu suscripción a un tercero.
+- **`fallback`** deja que el cambio automático recurra a DeepSeek cuando todas
+  las cuentas están agotadas, y solo entonces: una sola lectura de uso ilegible
+  lo frena. Vuelve a la suscripción en cuanto una cuenta recupere, porque
+  cualquier cambio de cuenta desactiva DeepSeek antes.
+- Contra DeepSeek no funcionan la caché de prompts, leer PDF, los conectores de
+  claude.ai ni `/schedule`.
+
 ## Precalentar la cuenta de reserva
 
 La ventana de 5 h de una cuenta **la abre su primer mensaje** — no el login ni
