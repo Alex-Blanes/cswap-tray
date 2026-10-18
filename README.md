@@ -24,7 +24,8 @@ ships a `menubar` for macOS; this fills the gap on Windows.
 
 - **Left click**: rotate to the next account. With two accounts, it toggles.
 - **Right click**: menu with every account and its usage (including when each
-  window resets), auto-switch, prewarming, the icon legend and the actions.
+  window resets), auto-switch, prewarming, the icon legend and the actions,
+  plus the DeepSeek session when it is configured.
 - **Hover**: a summary of all accounts.
 
 When an account's refresh token dies, `cswap` can no longer read its quota and
@@ -122,7 +123,8 @@ without it, an account hovering around the threshold would flap constantly.
 
 Optional, off unless you fill it in, and the only part of the tray that can
 spend money. DeepSeek serves an Anthropic-compatible API, so Claude Code can
-talk to it without changing anything else.
+talk to it with nothing else — but it is a **session**, not a third account to
+switch to.
 
 ```json
 "deepseek": {
@@ -138,22 +140,28 @@ run as `<python> <script> get`, and exits non-zero when there is no key. With
 key in the Windows credential manager or another store — never in a file the
 tray or the repository can read.
 
-Switching it on patches `~/.claude/settings.json`: `apiKeyHelper` plus the
-`env` entries for the base URL and the model names, all in one atomic write.
-Switching it off removes exactly those. Your other settings are untouched, and
-an `apiKeyHelper` that is not this one is left alone.
-
-- **Open a new session afterwards.** The model variables are only read at
-  startup, so an already-running session would keep asking for Claude models.
-- **Everything runs on `deepseek-flash`.** Without pinning the model names,
-  Claude Code sends `claude-opus-*`, which DeepSeek maps to its Pro tier.
-- **With no key it refuses to switch on.** A helper that prints nothing would
-  leave Claude Code using your OAuth token against `api.deepseek.com` — that
-  is, handing your subscription token to a third party.
-- **`fallback`** lets auto-switch go to DeepSeek when every account is spent,
-  and only then: a single unreadable usage figure holds it back. It returns to
-  the subscription the moment an account recovers, because any account switch
-  turns DeepSeek off first.
+- **One click opens a session.** The menu entry opens a console titled
+  *DeepSeek* in your last project, running `claude --settings` with a file that
+  points at DeepSeek. That window is the only thing billed; your other sessions
+  keep their account and you can keep switching with `cswap` in the meantime.
+- **`claude-ds` in any terminal.** The tray installs `claude-ds.cmd` next to
+  `claude.exe`, so a session is `claude-ds` — same arguments as `claude`, no
+  flag to remember.
+- **Why not a switch.** Claude Code resolves the credential when a session
+  starts, while the base URL from settings can reach a session already running.
+  Patching `~/.claude/settings.json` therefore moves a running session's URL to
+  DeepSeek but leaves the subscription's OAuth token in place: that token is
+  what reaches api.deepseek.com — a 401 — and the URL stays behind when the
+  patch is removed. Nothing outside the process can fix that; a per-session
+  file keeps both halves tied.
+- **Tool search is off.** Claude Code 2.1.286+ sends `tool_definition` blocks
+  that DeepSeek rejects with a 422 its fallback does not recognise
+  ([deepseek-ai/DeepSeek-V3#1701](https://github.com/deepseek-ai/DeepSeek-V3/issues/1701)).
+  The session pins `ENABLE_TOOL_SEARCH=false`, so every MCP tool is declared up
+  front: ~50k tokens of context in a fresh session, paid per use.
+- **`fallback`** opens that window when auto-switch finds every subscription
+  spent. Opening it costs nothing; typing there does. It is offered once per
+  dry spell, and the menu entry is always there.
 - Prompt caching, PDF reading, claude.ai connectors and `/schedule` do not work
   against DeepSeek.
 
@@ -248,6 +256,7 @@ polling does not trigger API calls.
 | `src/cswap.rs` | Invoke the CLI and deserialize `list --json` (schemaVersion 1) |
 | `src/auto.rs` | Auto-switch policy: a pure function over the snapshot |
 | `src/prewarm.rs` | Cold-reserve detection and message-landed evidence |
+| `src/deepseek.rs` | Per-session DeepSeek settings and the `claude-ds` launcher |
 | `src/icon.rs` | Draw the RGBA icon: own 5×7 font plus bars |
 | `src/i18n.rs` | UI strings in English and Spanish |
 | `src/config.rs` | Per-account appearance and the personal/work heuristic |
@@ -257,7 +266,7 @@ Polling and switching run on a separate thread so the CLI — which is Python an
 takes about a second to start — never blocks the interface.
 
 ```powershell
-cargo test                                        # 28 tests
+cargo test                                        # 46 tests
 cargo test preview -- --ignored --nocapture       # preview the icon as ASCII
 ```
 

@@ -106,27 +106,28 @@ impl Lang {
         )
     }
     // --- DeepSeek ----------------------------------------------------------
-    pub fn deepseek_label(self) -> &'static str {
-        s!(self, "DeepSeek (API, pay per use)", "DeepSeek (API, pago por uso)")
-    }
-    pub fn deepseek_on_title(self) -> &'static str {
-        s!(self, "DeepSeek is now active", "DeepSeek activado")
-    }
-    pub fn deepseek_on_body(self) -> &'static str {
+    pub fn deepseek_open(self) -> &'static str {
         s!(
             self,
-            "Open a new Claude Code session: the model variables only apply at startup. Everything runs on deepseek-flash and is billed per use.",
-            "Abre una sesión nueva de Claude Code: las variables de modelo solo se leen al arrancar. Todo va por deepseek-flash y se factura por uso."
+            "Open a DeepSeek session (API, pay per use)",
+            "Abrir una sesión de DeepSeek (API, pago por uso)"
         )
     }
-    pub fn deepseek_off_title(self) -> &'static str {
-        s!(self, "DeepSeek off", "DeepSeek desactivado")
+    pub fn deepseek_opened_title(self) -> &'static str {
+        s!(self, "DeepSeek session", "Sesión de DeepSeek")
     }
-    pub fn deepseek_off_body(self, name: &str) -> String {
+    pub fn deepseek_opened_body(self) -> &'static str {
         s!(
             self,
-            format!("Back on the subscription ({name}). Open a new session to drop the model variables."),
-            format!("De vuelta a la suscripción ({name}). Abre una sesión nueva para soltar las variables de modelo.")
+            "A new window is running on DeepSeek, billed per use. Your other sessions are untouched.",
+            "Hay una ventana nueva con DeepSeek, que se factura por uso. Tus otras sesiones no cambian."
+        )
+    }
+    pub fn deepseek_failed_title(self) -> &'static str {
+        s!(
+            self,
+            "Could not open the DeepSeek session",
+            "No he podido abrir la sesión de DeepSeek"
         )
     }
     pub fn deepseek_no_key_title(self) -> &'static str {
@@ -135,18 +136,22 @@ impl Lang {
     pub fn deepseek_no_key_body(self) -> &'static str {
         s!(
             self,
-            "Not switching: without a key Claude Code would send the subscription token to api.deepseek.com. Store it with deepseek-key.py set.",
-            "No cambio: sin clave, Claude Code mandaría el token de la suscripción a api.deepseek.com. Guárdala con deepseek-key.py set."
+            "Not opening it: without a key Claude Code has no credential of its own and would fall back to the subscription's. Store it with deepseek-key.py set.",
+            "No la abro: sin clave, Claude Code no tiene credencial propia y caería en la de la suscripción. Guárdala con deepseek-key.py set."
         )
     }
     pub fn deepseek_fallback_title(self) -> &'static str {
-        s!(self, "Every account spent → DeepSeek", "Cuotas agotadas → DeepSeek")
+        s!(
+            self,
+            "Every account spent → DeepSeek session",
+            "Cuotas agotadas → sesión de DeepSeek"
+        )
     }
     pub fn deepseek_fallback_body(self) -> &'static str {
         s!(
             self,
-            "Last resort: now billing per use. It returns to the subscription as soon as an account recovers.",
-            "Último recurso: ahora se paga por uso. Vuelve a la suscripción en cuanto una cuenta recupere."
+            "I opened a DeepSeek window in your last project. It is billed per use; close it when you are back.",
+            "He abierto una ventana de DeepSeek en tu último proyecto. Se factura por uso; ciérrala cuando vuelvas."
         )
     }
     pub fn enable(self) -> &'static str {

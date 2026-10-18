@@ -113,9 +113,9 @@ impl Default for PrewarmCfg {
     }
 }
 
-/// DeepSeek's paid API as one more account. Off unless `script` points at the
-/// helper that prints the key, so the feature does not exist for anyone who
-/// has not set it up. See `deepseek.rs`.
+/// DeepSeek's paid API as an extra *session*, not an account to switch to.
+/// Off unless `script` points at the helper that prints the key, so the feature
+/// does not exist for anyone who has not set it up. See `deepseek.rs`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeepSeekCfg {
     /// Interpreter for the helper. Empty means "python" on PATH.
@@ -124,8 +124,10 @@ pub struct DeepSeekCfg {
     /// Full path to `deepseek-key.py`. Empty disables the whole feature.
     #[serde(default)]
     pub script: String,
-    /// Let auto-switch fall back to DeepSeek when every subscription is spent.
-    /// This is the one setting that can start spending money on its own.
+    /// Open a DeepSeek session when auto-switch finds every subscription
+    /// spent. Opening one spends nothing; what you type there does. This is
+    /// the one setting that can put you in front of the paid API without a
+    /// click, never one that bills by itself.
     #[serde(default = "yes")]
     pub fallback: bool,
 }
