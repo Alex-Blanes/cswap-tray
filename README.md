@@ -170,6 +170,41 @@ tray or the repository can read.
 - Prompt caching, PDF reading, claude.ai connectors and `/schedule` do not work
   against DeepSeek.
 
+## Claude Code on the NAS
+
+The tray reads and changes the accounts of the Claude Code containers running on
+the NAS, one per project. There is no agent on the other side: every container
+already carries its own `cswap`, and the tray drives it over SSH with
+`docker exec`.
+
+```json
+"nas": {
+  "ssh": "nas",              // ~/.ssh/config alias; empty turns the section off
+  "sudo": true,              // docker needs sudo on the NAS
+  "filter": "claude-code",   // container name or image must contain this
+  "refresh_seconds": 60
+}
+```
+
+Containers are discovered: any whose name or image contains `filter` shows up
+under the `NAS` submenu on the next read. Inside each one:
+
+- **Accounts**: click to switch. A manual switch pauses `cswap-preferida` in
+  that container; otherwise it would move back to the preferred one within a
+  minute.
+- **Auto**: pause or resume that daemon.
+- **Preferred**: where its auto-switcher returns to. The first time it installs
+  the version of the script that reads the preference from
+  `~/.config/cswap-preferida.json` (the previous one is kept as `.bak`); after
+  that, writing that file is enough.
+- **DeepSeek (API)**: provisions the launcher inside the container and opens a
+  paid session in a terminal. The key travels on stdin, never in an argument,
+  and ends up in a mode-600 file read by `apiKeyHelper`.
+
+A session that is already open picks the new account up on its next message:
+`cswap switch` writes `.credentials.json` and Claude Code drops the cached
+token.
+
 ## Prewarming the reserve
 
 An account's 5h window **is opened by its first message** — not by the login or
@@ -262,6 +297,7 @@ polling does not trigger API calls.
 | `src/auto.rs` | Auto-switch policy: a pure function over the snapshot |
 | `src/prewarm.rs` | Cold-reserve detection and message-landed evidence |
 | `src/deepseek.rs` | Per-session DeepSeek settings and the `claude-ds` launcher |
+| `src/nas.rs` | NAS containers over SSH: accounts, preferred and DeepSeek |
 | `src/clipboard.rs` | Write the copied command to the Windows clipboard |
 | `src/icon.rs` | Draw the RGBA icon: own 5×7 font plus bars |
 | `src/i18n.rs` | UI strings in English and Spanish |
@@ -272,7 +308,7 @@ Polling and switching run on a separate thread so the CLI — which is Python an
 takes about a second to start — never blocks the interface.
 
 ```powershell
-cargo test                                        # 45 tests
+cargo test                                        # 51 tests
 cargo test preview -- --ignored --nocapture       # preview the icon as ASCII
 ```
 

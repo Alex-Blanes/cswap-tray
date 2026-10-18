@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Cambio automático de cuenta de Claude con cuenta preferida, igual que cswap-tray en el PC.
+
+Vive en la preferida; cuando la activa llega a SWITCH_AT pasa a otra con hueco, y vuelve a la
+preferida en cuanto baja de RETURN_BELOW (la histéresis evita el ida y vuelta). `cswap auto` no
+sabe volver: su `best` se queda donde haya más cuota. Por eso la decisión se toma aquí y solo el
+cambio se delega en `cswap switch`. Misma regla que cswap-tray/src/auto.rs.
+
+La preferida y los umbrales se leen de ~/.config/cswap-preferida.json en cada pasada, para que la
+bandeja pueda cambiarlos sin reiniciar esto. Sin fichero valen los valores de aquí abajo.
+
+    cswap-preferida              bucle cada INTERVAL segundos
+    cswap-preferida --once       una pasada (sin memoria del cooldown)
+    cswap-preferida --dry-run    dice lo que haría, sin cambiar
+    cswap-preferida --selftest   comprueba la regla
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+# Sin preferida por defecto: la pone ~/.config/cswap-preferida.json, que es lo
+# que escribe la bandeja. Vacía, el bucle solo se aparta de la cuenta activa
+# cuando llega al umbral, sin volver a ninguna en concreto.
+PREFERRED = ""
+SWITCH_AT, RETURN_BELOW = 90.0, 80.0
+COOLDOWN, INTERVAL = 300, 60
+CONFIG = os.path.expanduser("~/.config/cswap-preferida.json")
+
+
+def settings():
+    """(preferida, switch_at, return_below) con el fichero por encima del script."""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            c = json.load(f)
+    except (OSError, ValueError):
+        return PREFERRED, SWITCH_AT, RETURN_BELOW
+    try:
+        return (c.get("preferred") or PREFERRED,
+                float(c.get("switch_at", SWITCH_AT)),
+                float(c.get("return_below", RETURN_BELOW)))
+    except (AttributeError, TypeError, ValueError):
+        return PREFERRED, SWITCH_AT, RETURN_BELOW
+
+
+def pct(acc, window):
+    usage = acc.get("usage") or acc.get("lastGoodUsage") or {}
+    w = usage.get(window)
+    if not isinstance(w, dict):
+        return None
+    # cswap solo refresca al llamar a la API: pasada la hora de reinicio, la lectura es vieja.
+    resets = w.get("resetsAt")
+    if resets and datetime.fromisoformat(resets) <= datetime.now(timezone.utc):
+        return 0.0
+    return float(w.get("pct", 0))
+
+
+def binding(acc):
+    """La ventana que antes limita, sea la de 5 h o la de 7 d."""
+    vals = [p for p in (pct(acc, "fiveHour"), pct(acc, "sevenDay")) if p is not None]
+    return max(vals) if vals else None
+
+
+def usable(acc, below):
+    b = binding(acc)
+    return acc.get("usageStatus", "ok") in ("", "ok") and b is not None and b < below
+
+
+def decide(accounts, preferred=PREFERRED, switch_at=SWITCH_AT, return_below=RETURN_BELOW):
+    """El número de cuenta al que cambiar, o None para quedarse."""
+    active = next((a for a in accounts if a.get("active")), None)
+    if len(accounts) < 2 or active is None:
+        return None
+    pref = next((a for a in accounts if a.get("email") == preferred), None)
+    if pref and not pref.get("active") and usable(pref, return_below):
+        return pref["number"]
+    b = binding(active)
+    if b is None or b < switch_at:
+        return None
+    cands = [a for a in accounts if not a.get("active") and usable(a, switch_at)]
+    if pref in cands:
+        return pref["number"]
+    return min(cands, key=binding)["number"] if cands else None
+
+
+def selftest():
+    def acc(n, email, active, five, seven, status="ok"):
+        return {"number": n, "email": email, "active": active, "usageStatus": status,
+                "usage": {"fiveHour": {"pct": five}, "sevenDay": {"pct": seven}}}
+    p, w = "preferida@x.com", "otra@x.com"
+
+    def d(accounts, preferred=p):
+        return decide(accounts, preferred)
+
+    assert d([acc(1, p, True, 40, 20), acc(2, w, False, 0, 0)]) is None
+    assert d([acc(1, p, True, 100, 63), acc(2, w, False, 2, 19)]) == 2
+    assert d([acc(1, p, True, 10, 95), acc(2, w, False, 2, 19)]) == 2
+    assert d([acc(1, p, False, 5, 30), acc(2, w, True, 50, 40)]) == 1
+    assert d([acc(1, p, False, 85, 30), acc(2, w, True, 50, 40)]) is None
+    assert d([acc(1, p, True, 100, 63), acc(2, w, False, 99, 90)]) is None
+    assert d([acc(1, p, True, 100, 10), acc(2, w, False, 1, 1, "error")]) is None
+    old = acc(1, p, False, 100, 30)
+    old["usage"]["fiveHour"]["resetsAt"] = "2000-01-01T00:00:00+00:00"
+    assert d([old, acc(2, w, True, 50, 40)]) == 1, "una ventana ya reiniciada cuenta como 0 %"
+    # La preferida se puede cambiar sin tocar el código.
+    assert decide([acc(1, "nueva@x.com", False, 0, 0), acc(2, p, True, 50, 40)],
+                  "nueva@x.com") == 1
+    print("selftest ok")
+
+
+def main():
+    if "--selftest" in sys.argv:
+        return selftest()
+    once, dry = "--once" in sys.argv, "--dry-run" in sys.argv
+    last_switch = 0.0
+    while True:
+        try:
+            preferred, switch_at, return_below = settings()
+            out = subprocess.run(["cswap", "list", "--json"], capture_output=True, text=True,
+                                 timeout=120, check=True).stdout
+            target = decide(json.loads(out)["accounts"], preferred, switch_at, return_below)
+            if target is not None and time.time() - last_switch >= COOLDOWN:
+                print(f"{datetime.now():%F %T} cambio a la cuenta {target}"
+                      f"{' (dry-run)' if dry else ''}", flush=True)
+                if not dry:
+                    subprocess.run(["cswap", "switch", str(target)], check=True, timeout=120)
+                    last_switch = time.time()
+            elif once:
+                print("sin cambios", flush=True)
+        except Exception as error:
+            print(f"{datetime.now():%F %T} error: {error}", file=sys.stderr, flush=True)
+        if once:
+            return
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    main()

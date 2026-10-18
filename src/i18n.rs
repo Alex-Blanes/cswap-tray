@@ -217,6 +217,112 @@ impl Lang {
         )
     }
 
+    // --- NAS containers ----------------------------------------------------
+    pub fn nas_label(self) -> &'static str {
+        s!(self, "NAS (Claude Code)", "NAS (Claude Code)")
+    }
+    pub fn nas_unreachable(self) -> &'static str {
+        s!(self, "NAS — unreachable", "NAS — sin conexión")
+    }
+    pub fn nas_waiting(self) -> &'static str {
+        s!(
+            self,
+            "Reading the containers…",
+            "Leyendo los contenedores…"
+        )
+    }
+    pub fn nas_no_data(self) -> &'static str {
+        s!(self, "cswap did not answer", "cswap no responde")
+    }
+    pub fn nas_auto_on(self) -> &'static str {
+        s!(
+            self,
+            "Auto: on — click to pause",
+            "Auto: sí — pulsa para pausar"
+        )
+    }
+    pub fn nas_auto_off(self) -> &'static str {
+        s!(
+            self,
+            "Auto: off — click to resume",
+            "Auto: no — pulsa para reanudar"
+        )
+    }
+    pub fn nas_switched_title(self, container: &str) -> String {
+        s!(
+            self,
+            format!("NAS · {container}"),
+            format!("NAS · {container}")
+        )
+    }
+    pub fn nas_switched_body(self, account: u32) -> String {
+        s!(
+            self,
+            format!(
+                "Account {account} is active and auto-switch is paused. \
+                 Open sessions pick it up on their next message."
+            ),
+            format!(
+                "Cuenta {account} activa y automático pausado. \
+                 Las sesiones abiertas la cogen en el siguiente mensaje."
+            )
+        )
+    }
+    pub fn nas_failed(self) -> &'static str {
+        s!(
+            self,
+            "NAS: could not change the account",
+            "NAS: no se pudo cambiar la cuenta"
+        )
+    }
+    pub fn nas_preferred_title(self, name: &str) -> String {
+        s!(
+            self,
+            format!("Preferred: {name}"),
+            format!("Preferida: {name}")
+        )
+    }
+    pub fn nas_preferred_unset(self) -> &'static str {
+        // No file yet: the daemon still has the preference hard-coded in its
+        // own script, and that is what it will return to.
+        s!(self, "from the script", "según el script")
+    }
+    pub fn nas_deepseek(self) -> &'static str {
+        s!(
+            self,
+            "Open a DeepSeek (API) session",
+            "Abrir sesión DeepSeek (API)"
+        )
+    }
+    pub fn nas_deepseek_failed(self) -> &'static str {
+        s!(
+            self,
+            "NAS: could not open the DeepSeek session",
+            "NAS: no se pudo abrir la sesión DeepSeek"
+        )
+    }
+    pub fn nas_help(self) -> &'static [&'static str] {
+        s!(
+            self,
+            &[
+                "One container per project on the NAS.",
+                "Switching here applies to that container only.",
+                "A manual switch pauses its auto (preferred) daemon.",
+                "An open session takes it on the next message.",
+                "Preferred: where its auto-switcher returns to.",
+                "DeepSeek: opens a paid session in that container.",
+            ][..],
+            &[
+                "Un contenedor por proyecto en el NAS.",
+                "Cambiar aquí afecta solo a ese contenedor.",
+                "El cambio manual pausa su automático (preferida).",
+                "La sesión abierta la coge en el siguiente mensaje.",
+                "Preferida: a dónde vuelve su cambio automático.",
+                "DeepSeek: abre una sesión de pago en ese contenedor.",
+            ][..]
+        )
+    }
+
     // --- prewarm submenu ---------------------------------------------------
     pub fn prewarm_title(self) -> &'static str {
         s!(self, "Prewarm the reserve", "Precalentar reserva")

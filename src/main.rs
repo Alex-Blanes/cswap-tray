@@ -16,6 +16,7 @@ mod cswap;
 mod deepseek;
 mod i18n;
 mod icon;
+mod nas;
 mod prewarm;
 
 use std::sync::Mutex;
@@ -39,9 +40,26 @@ const TOOLTIP_MAX: usize = 127;
 enum Cmd {
     Refresh,
     Switch(Option<u32>),
+    NasRefresh,
+    NasSwitch {
+        container: String,
+        account: u32,
+    },
+    NasAuto {
+        container: String,
+        on: bool,
+    },
+    NasPrefer {
+        container: String,
+        email: String,
+    },
+    NasDeepseek {
+        container: String,
+    },
 }
 
 type SnapResult = Result<cswap::Snapshot, String>;
+type NasResult = Result<nas::Snapshot, String>;
 
 fn main() {
     let cfg_lang = Lang::resolve(&config::load().language);
@@ -88,12 +106,23 @@ fn main() {
     let lang = Lang::resolve(&cfg.language);
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
     let (snap_tx, snap_rx) = channel::<SnapResult>();
-    spawn_worker(cfg.refresh_seconds, cmd_rx, snap_tx);
+    let (nas_tx, nas_rx) = channel::<NasResult>();
+    spawn_worker(
+        cfg.refresh_seconds,
+        cfg.nas.clone(),
+        cfg.deepseek.clone(),
+        lang,
+        cmd_rx,
+        snap_tx,
+        nas_tx,
+    );
 
     let icon_size = unsafe { GetSystemMetrics(SM_CXSMICON) }.max(16) as u32;
     let mut state = State {
         snapshot: None,
         error: None,
+        nas: None,
+        nas_error: None,
         last_auto_switch: None,
         armed: None,
         cold_notified: false,
@@ -113,12 +142,19 @@ fn main() {
         .expect("could not create the tray icon");
 
     let _ = cmd_tx.send(Cmd::Refresh);
-    run_message_loop(&tray, &mut cfg, &mut state, lang, icon_size, &cmd_tx, &snap_rx);
+    run_message_loop(
+        &tray, &mut cfg, &mut state, lang, icon_size, &cmd_tx, &snap_rx, &nas_rx,
+    );
 }
 
 struct State {
     snapshot: Option<cswap::Snapshot>,
     error: Option<String>,
+    /// Accounts and auto state of the Claude Code containers on the NAS.
+    nas: Option<nas::Snapshot>,
+    /// Why the NAS could not be read. Kept apart from `error`: a NAS outage
+    /// must not blank the local accounts.
+    nas_error: Option<String>,
     /// When the last automatic switch happened, to honour the cooldown.
     last_auto_switch: Option<Instant>,
     /// Prewarm in flight: we sit on the reserve waiting for the user's message
@@ -166,9 +202,19 @@ impl State {
     }
 }
 
-fn spawn_worker(refresh_seconds: u64, cmd_rx: Receiver<Cmd>, snap_tx: Sender<SnapResult>) {
+fn spawn_worker(
+    refresh_seconds: u64,
+    nas_cfg: config::NasCfg,
+    deepseek_cfg: config::DeepSeekCfg,
+    lang: Lang,
+    cmd_rx: Receiver<Cmd>,
+    snap_tx: Sender<SnapResult>,
+    nas_tx: Sender<NasResult>,
+) {
     let period = Duration::from_secs(refresh_seconds.clamp(5, 3600));
+    let nas_period = Duration::from_secs(nas_cfg.refresh_seconds.clamp(10, 3600));
     std::thread::spawn(move || {
+        let mut last_nas: Option<Instant> = None;
         loop {
             let cmd = match cmd_rx.recv_timeout(period) {
                 Ok(c) => Some(c),
@@ -176,13 +222,72 @@ fn spawn_worker(refresh_seconds: u64, cmd_rx: Receiver<Cmd>, snap_tx: Sender<Sna
                 // The main thread is gone: follow it out.
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if let Some(Cmd::Switch(target)) = cmd {
-                if let Err(e) = cswap::switch(target) {
-                    if snap_tx.send(Err(e)).is_err() {
-                        break;
+            let mut refresh_nas = false;
+            match cmd {
+                Some(Cmd::Switch(target)) => {
+                    if let Err(e) = cswap::switch(target) {
+                        if snap_tx.send(Err(e)).is_err() {
+                            break;
+                        }
+                        continue;
                     }
-                    continue;
                 }
+                Some(Cmd::NasRefresh) => refresh_nas = true,
+                Some(Cmd::NasSwitch { container, account }) => {
+                    match nas::switch(&nas_cfg, &container, account) {
+                        Ok(()) => notify(
+                            &lang.nas_switched_title(&container),
+                            &lang.nas_switched_body(account),
+                        ),
+                        Err(e) => {
+                            notify(lang.nas_failed(), &container);
+                            if nas_tx.send(Err(e)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    refresh_nas = true;
+                }
+                Some(Cmd::NasAuto { container, on }) => {
+                    if let Err(e) = nas::set_auto(&nas_cfg, &container, on) {
+                        if nas_tx.send(Err(e)).is_err() {
+                            break;
+                        }
+                    }
+                    refresh_nas = true;
+                }
+                Some(Cmd::NasPrefer { container, email }) => {
+                    if let Err(e) = nas::set_preferred(&nas_cfg, &container, &email) {
+                        notify(lang.nas_failed(), &container);
+                        if nas_tx.send(Err(e)).is_err() {
+                            break;
+                        }
+                    }
+                    refresh_nas = true;
+                }
+                Some(Cmd::NasDeepseek { container }) => {
+                    match deepseek::key(deepseek_cfg.python(), deepseek_cfg.script.trim()) {
+                        Some(key) => {
+                            if let Err(e) = nas::open_deepseek(&nas_cfg, &container, &key) {
+                                notify(lang.nas_deepseek_failed(), &container);
+                                let _ = nas_tx.send(Err(e));
+                            }
+                        }
+                        None => notify(
+                            lang.deepseek_no_key_title(),
+                            lang.deepseek_no_key_body(),
+                        ),
+                    }
+                }
+                Some(Cmd::Refresh) | None => {}
+            }
+            // Its own cadence: the NAS round trip must not set the pace of the
+            // local account polling, and vice versa.
+            if nas_cfg.enabled()
+                && (refresh_nas || last_nas.is_none_or(|t| t.elapsed() >= nas_period))
+            {
+                let _ = nas_tx.send(nas::list(&nas_cfg));
+                last_nas = Some(Instant::now());
             }
             if snap_tx.send(cswap::list()).is_err() {
                 break;
@@ -199,6 +304,7 @@ fn run_message_loop(
     icon_size: u32,
     cmd_tx: &Sender<Cmd>,
     snap_rx: &Receiver<SnapResult>,
+    nas_rx: &Receiver<NasResult>,
 ) {
     unsafe { SetTimer(std::ptr::null_mut(), 1, TICK_MS, None) };
     let menu_events = MenuEvent::receiver();
@@ -216,6 +322,17 @@ fn run_message_loop(
         }
 
         let mut dirty = false;
+        while let Ok(result) = nas_rx.try_recv() {
+            match result {
+                Ok(snap) => {
+                    state.nas = Some(snap);
+                    state.nas_error = None;
+                }
+                Err(e) => state.nas_error = Some(e),
+            }
+            dirty = true;
+        }
+
         while let Ok(result) = snap_rx.try_recv() {
             match result {
                 Ok(snap) => {
@@ -268,6 +385,9 @@ fn run_message_loop(
                 }
                 "tui" => cswap::open_tui(),
                 "config" => open_config(),
+                "nas:refresh" => {
+                    let _ = cmd_tx.send(Cmd::NasRefresh);
+                }
                 "auto:toggle" => {
                     cfg.auto.enabled = !cfg.auto.enabled;
                     config::save(cfg);
@@ -306,6 +426,57 @@ fn run_message_loop(
                             config::save(cfg);
                             dirty = true;
                         }
+                    } else if let Some(rest) = id.strip_prefix("nas:switch:") {
+                        if let Some((container, n)) = rest.rsplit_once(':') {
+                            if let Ok(account) = n.parse::<u32>() {
+                                let _ = cmd_tx.send(Cmd::NasSwitch {
+                                    container: container.to_string(),
+                                    account,
+                                });
+                                dirty = true;
+                            }
+                        }
+                    } else if let Some(rest) = id.strip_prefix("nas:auto:") {
+                        if let Some((container, state)) = rest.rsplit_once(':') {
+                            if let Some(on) = match state {
+                                "on" => Some(true),
+                                "off" => Some(false),
+                                _ => None,
+                            } {
+                                let _ = cmd_tx.send(Cmd::NasAuto {
+                                    container: container.to_string(),
+                                    on,
+                                });
+                                dirty = true;
+                            }
+                        }
+                    } else if let Some(rest) = id.strip_prefix("nas:prefer:") {
+                        if let Some((container, n)) = rest.rsplit_once(':') {
+                            if let Ok(number) = n.parse::<u32>() {
+                                let email = state
+                                    .nas
+                                    .as_ref()
+                                    .and_then(|s| {
+                                        s.containers.iter().find(|c| c.name == container)
+                                    })
+                                    .and_then(|c| {
+                                        c.accounts.iter().find(|a| a.number == number)
+                                    })
+                                    .map(|a| a.email.clone());
+                                if let Some(email) = email {
+                                    let _ = cmd_tx.send(Cmd::NasPrefer {
+                                        container: container.to_string(),
+                                        email,
+                                    });
+                                    dirty = true;
+                                }
+                            }
+                        }
+                    } else if let Some(container) = id.strip_prefix("nas:deepseek:") {
+                        let _ = cmd_tx.send(Cmd::NasDeepseek {
+                            container: container.to_string(),
+                        });
+                        dirty = true;
                     }
                 }
             }
@@ -321,6 +492,12 @@ fn run_message_loop(
                     }
                 }
                 TrayIconEvent::Click { button: MouseButton::Right, button_state: MouseButtonState::Up, .. } => {
+                    // Asynchronous: the menu paints the cached answer and this
+                    // refresh lands for the next opening. Waiting here would
+                    // stall the menu behind an SSH round trip.
+                    if cfg.nas.enabled() {
+                        let _ = cmd_tx.send(Cmd::NasRefresh);
+                    }
                     show_fresh_menu(tray, cfg, state, lang);
                 }
                 _ => {}
@@ -731,6 +908,10 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
         let _ = menu.append(&deepseek_submenu(lang));
     }
 
+    if cfg.nas.enabled() {
+        let _ = menu.append(&nas_submenu(cfg, state, lang));
+    }
+
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&auto_submenu(cfg, state, lang));
     let _ = menu.append(&prewarm_submenu(cfg, state, lang));
@@ -767,6 +948,113 @@ fn deepseek_submenu(lang: Lang) -> Submenu {
     let _ = sub.append(&PredefinedMenuItem::separator());
     for line in lang.deepseek_help() {
         let _ = sub.append(&MenuItem::new(format!("   {line}"), false, None));
+    }
+    sub
+}
+
+/// NAS submenu: one child per Claude Code container, each with its accounts.
+/// The list is discovered on the NAS, not configured by hand: a new project
+/// container appears on the next refresh.
+fn nas_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
+    let title = if state.nas_error.is_some() {
+        lang.nas_unreachable()
+    } else {
+        lang.nas_label()
+    };
+    let sub = Submenu::new(title, true);
+
+    if let Some(err) = &state.nas_error {
+        let _ = sub.append(&MenuItem::new(format!("⚠ {}", truncate(err, 60)), false, None));
+    }
+
+    let containers = state
+        .nas
+        .as_ref()
+        .map(|s| s.containers.as_slice())
+        .unwrap_or(&[]);
+    if containers.is_empty() && state.nas_error.is_none() {
+        let _ = sub.append(&MenuItem::new(lang.nas_waiting(), false, None));
+    }
+
+    for c in containers {
+        let active = c
+            .accounts
+            .iter()
+            .find(|a| a.active)
+            .map(|a| config::presentation(cfg, &a.email, a.number).0)
+            .unwrap_or_else(|| lang.not_set().to_string());
+        let csub = Submenu::new(format!("{} — {}", c.name, active), true);
+
+        for acc in &c.accounts {
+            let (name, letter, _) = config::presentation(cfg, &acc.email, acc.number);
+            let mark = if acc.active { "●" } else { "○" };
+            let _ = csub.append(&MenuItem::with_id(
+                format!("nas:switch:{}:{}", c.name, acc.number),
+                format!("{mark} {name} ({letter}) — {}", usage_long(acc)),
+                !acc.active,
+                None,
+            ));
+        }
+        if c.accounts.is_empty() {
+            let _ = csub.append(&MenuItem::new(lang.nas_no_data(), false, None));
+        }
+
+        let _ = csub.append(&PredefinedMenuItem::separator());
+        // Clicking toggles: the label says what a click will do, and the id
+        // carries the state to land in.
+        let (label, next) = if c.auto {
+            (lang.nas_auto_on(), "off")
+        } else {
+            (lang.nas_auto_off(), "on")
+        };
+        let _ = csub.append(&MenuItem::with_id(
+            format!("nas:auto:{}:{}", c.name, next),
+            label,
+            true,
+            None,
+        ));
+        if !c.accounts.is_empty() {
+            let pref_name = c
+                .preferred
+                .as_deref()
+                .and_then(|email| {
+                    c.accounts
+                        .iter()
+                        .find(|a| a.email == email)
+                        .map(|a| config::presentation(cfg, &a.email, a.number).0)
+                })
+                .unwrap_or_else(|| lang.nas_preferred_unset().to_string());
+            let psub = Submenu::new(lang.nas_preferred_title(&pref_name), true);
+            for acc in &c.accounts {
+                let (name, _, _) = config::presentation(cfg, &acc.email, acc.number);
+                let chosen = c.preferred.as_deref() == Some(acc.email.as_str());
+                let mark = if chosen { "✓" } else { "  " };
+                let _ = psub.append(&MenuItem::with_id(
+                    format!("nas:prefer:{}:{}", c.name, acc.number),
+                    format!("{mark} {name}"),
+                    !chosen,
+                    None,
+                ));
+            }
+            let _ = csub.append(&psub);
+        }
+        if cfg.deepseek.available() {
+            let _ = csub.append(&MenuItem::with_id(
+                format!("nas:deepseek:{}", c.name),
+                lang.nas_deepseek(),
+                true,
+                None,
+            ));
+        }
+        let _ = csub.append(&MenuItem::with_id("nas:refresh", lang.refresh(), true, None));
+        let _ = sub.append(&csub);
+    }
+
+    if !containers.is_empty() {
+        let _ = sub.append(&PredefinedMenuItem::separator());
+        for line in lang.nas_help() {
+            let _ = sub.append(&MenuItem::new(format!("   {line}"), false, None));
+        }
     }
     sub
 }

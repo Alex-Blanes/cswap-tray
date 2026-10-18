@@ -182,17 +182,34 @@ pub fn command(resume: bool) -> String {
     }
 }
 
+/// The key itself. It is returned for provisioning another machine and is
+/// never logged or written to disk on this side.
+pub fn key(python: &str, script: &str) -> Option<String> {
+    let out = Command::new(python)
+        .args([script, "get"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let key = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if key.is_empty() { None } else { Some(key) }
+}
+
 /// Whether the key is actually there. The gate on the way in: with no key the
 /// helper fails, and Claude Code refuses to start rather than fall back to the
 /// subscription's OAuth token.
 pub fn key_available(python: &str, script: &str) -> bool {
-    Command::new(python)
-        .args([script, "get"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .is_ok_and(|o| {
-            o.status.success() && !o.stdout.iter().all(|byte| byte.is_ascii_whitespace())
-        })
+    key(python, script).is_some()
+}
+
+/// Settings for a Linux container: same endpoint, models and flags, but the
+/// helper reads the key from a file there — the Windows credential manager is
+/// not reachable from the NAS. Never contains the key itself.
+pub fn remote_settings_json() -> String {
+    serde_json::to_string_pretty(&session_settings("/home/claude/.local/bin/deepseek-key"))
+        .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Removes the keys the previous version wrote into `~/.claude/settings.json`.
@@ -272,6 +289,14 @@ mod tests {
     #[test]
     fn the_settings_file_never_holds_the_key() {
         let text = serde_json::to_string(&session_settings("py deepseek-key.py get")).unwrap();
+        assert!(!text.contains("sk-"));
+    }
+
+    #[test]
+    fn the_remote_settings_read_the_key_from_a_file_and_carry_no_secret() {
+        let text = remote_settings_json();
+        assert!(text.contains("/home/claude/.local/bin/deepseek-key"));
+        assert!(text.contains("deepseek-flash[1m]"));
         assert!(!text.contains("sk-"));
     }
 

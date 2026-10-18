@@ -175,6 +175,40 @@ repositorio.
 - Contra DeepSeek no funcionan la caché de prompts, leer PDF, los conectores de
   claude.ai ni `/schedule`.
 
+## Claude Code en el NAS
+
+La bandeja lee y cambia las cuentas de los Claude Code que corren en el NAS, uno
+por proyecto (un contenedor por proyecto). No hay ningún agente al otro lado:
+cada contenedor ya lleva su `cswap`, y la bandeja lo maneja por SSH con
+`docker exec`.
+
+```json
+"nas": {
+  "ssh": "nas",              // alias de ~/.ssh/config; vacío apaga la sección
+  "sudo": true,              // docker necesita sudo en el NAS
+  "filter": "claude-code",   // nombre o imagen que deben contener
+  "refresh_seconds": 60
+}
+```
+
+Los contenedores se descubren solos: el que se llame, o use una imagen, que
+contenga `filter` aparece en el submenú `NAS` en la siguiente lectura. Dentro de
+cada uno:
+
+- **Cuentas**: clic para cambiar. El cambio manual pausa `cswap-preferida` en
+  ese contenedor; si no, volvería a la preferida en menos de un minuto.
+- **Auto**: pausa o reanuda ese demonio.
+- **Preferida**: a qué cuenta vuelve el automático. La primera vez instala la
+  versión del script que lee la preferencia de `~/.config/cswap-preferida.json`
+  (deja la anterior como `.bak`); después basta con escribir ese fichero.
+- **DeepSeek (API)**: aprovisiona el lanzador dentro del contenedor y abre una
+  sesión de pago en una terminal. La clave viaja por stdin, nunca en un
+  argumento, y queda en un fichero 600 leído por el `apiKeyHelper`.
+
+La sesión que ya esté abierta coge la cuenta nueva en el siguiente mensaje:
+`cswap switch` escribe `.credentials.json` y Claude Code suelta el token
+cacheado.
+
 ## Precalentar la cuenta de reserva
 
 La ventana de 5 h de una cuenta **la abre su primer mensaje** — no el login ni
@@ -270,6 +304,7 @@ así que sondear no dispara llamadas a la API.
 | `src/auto.rs` | Política de cambio automático: función pura sobre la instantánea |
 | `src/prewarm.rs` | Detección de reserva fría y de que el mensaje ha aterrizado |
 | `src/deepseek.rs` | Ajustes de DeepSeek por sesión y el lanzador `claude-ds` |
+| `src/nas.rs` | Contenedores del NAS por SSH: cuentas, preferida y DeepSeek |
 | `src/clipboard.rs` | Escribir el comando copiado en el portapapeles de Windows |
 | `src/icon.rs` | Dibujar el icono RGBA: fuente 5×7 propia + barras |
 | `src/i18n.rs` | Cadenas de la interfaz en inglés y castellano |
@@ -280,7 +315,7 @@ El sondeo y los cambios de cuenta corren en un hilo aparte para que el CLI (que
 es Python y tarda ~1 s en arrancar) no bloquee la interfaz.
 
 ```powershell
-cargo test                                        # 45 tests
+cargo test                                        # 51 tests
 cargo test preview -- --ignored --nocapture       # previsualizar el icono en ASCII
 ```
 

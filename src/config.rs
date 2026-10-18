@@ -145,6 +145,52 @@ impl DeepSeekCfg {
     }
 }
 
+/// Claude Code containers on the NAS, one per project. The tray reaches each
+/// one over SSH and drives the `cswap` already installed inside it, so there is
+/// no second agent to deploy or keep in sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NasCfg {
+    /// SSH host alias (or `user@host`). Empty turns the whole section off.
+    #[serde(default = "default_nas_ssh")]
+    pub ssh: String,
+    /// Docker needs sudo on the NAS; `-n` keeps it from ever prompting.
+    #[serde(default = "yes")]
+    pub sudo: bool,
+    /// Only containers whose name or image contains this. Empty means all.
+    #[serde(default = "default_nas_filter")]
+    pub filter: String,
+    /// How often the remote accounts are re-read.
+    #[serde(default = "default_nas_refresh")]
+    pub refresh_seconds: u64,
+}
+
+fn default_nas_ssh() -> String {
+    "nas".to_string()
+}
+fn default_nas_filter() -> String {
+    "claude-code".to_string()
+}
+fn default_nas_refresh() -> u64 {
+    60
+}
+
+impl Default for NasCfg {
+    fn default() -> Self {
+        NasCfg {
+            ssh: default_nas_ssh(),
+            sudo: true,
+            filter: default_nas_filter(),
+            refresh_seconds: default_nas_refresh(),
+        }
+    }
+}
+
+impl NasCfg {
+    pub fn enabled(&self) -> bool {
+        !self.ssh.trim().is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// UI language: "auto" (follow Windows), "en" or "es".
@@ -160,6 +206,8 @@ pub struct Config {
     pub prewarm: PrewarmCfg,
     #[serde(default)]
     pub deepseek: DeepSeekCfg,
+    #[serde(default)]
+    pub nas: NasCfg,
     /// Key: the account email exactly as cswap reports it.
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountCfg>,
@@ -180,6 +228,7 @@ impl Default for Config {
             auto: AutoCfg::default(),
             prewarm: PrewarmCfg::default(),
             deepseek: DeepSeekCfg::default(),
+            nas: NasCfg::default(),
             accounts: BTreeMap::new(),
         }
     }
