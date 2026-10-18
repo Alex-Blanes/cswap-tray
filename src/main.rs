@@ -10,6 +10,7 @@
 #![windows_subsystem = "windows"]
 
 mod auto;
+mod clipboard;
 mod config;
 mod cswap;
 mod deepseek;
@@ -97,7 +98,7 @@ fn main() {
         armed: None,
         cold_notified: false,
         relogin_notified: std::collections::BTreeSet::new(),
-        deepseek_opened: false,
+        deepseek_offered: false,
     };
 
     let tray = TrayIconBuilder::new()
@@ -128,10 +129,10 @@ struct State {
     /// Accounts already warned about a dead token, so the toast fires on the
     /// transition and not on every poll.
     relogin_notified: std::collections::BTreeSet<u32>,
-    /// DeepSeek already offered during this dry spell, so the fallback opens
-    /// one window and not a new one every cooldown. It is re-armed as soon as
-    /// an account has quota again.
-    deepseek_opened: bool,
+    /// DeepSeek already offered during this dry spell, so the fallback copies
+    /// the command once and not again every cooldown. It is re-armed as soon
+    /// as an account has quota again.
+    deepseek_offered: bool,
 }
 
 /// State of "send my next message through the reserve".
@@ -253,9 +254,15 @@ fn run_message_loop(
                     let _ = cmd_tx.send(Cmd::Refresh);
                 }
                 "rotate" => order_switch(cmd_tx, None),
-                "deepseek:open" => {
-                    if open_deepseek(cfg, state, lang) {
-                        notify(lang.deepseek_opened_title(), lang.deepseek_opened_body());
+                "deepseek:copy" => {
+                    if let Some(command) = copy_deepseek_command(cfg, state, lang, false) {
+                        notify(lang.deepseek_copied_title(), &lang.deepseek_copied_body(&command));
+                    }
+                    dirty = true;
+                }
+                "deepseek:copy:resume" => {
+                    if let Some(command) = copy_deepseek_command(cfg, state, lang, true) {
+                        notify(lang.deepseek_copied_title(), &lang.deepseek_copied_body(&command));
                     }
                     dirty = true;
                 }
@@ -266,7 +273,7 @@ fn run_message_loop(
                     config::save(cfg);
                     // Once switched on, let it act right away if it applies.
                     state.last_auto_switch = None;
-                    state.deepseek_opened = false;
+                    state.deepseek_offered = false;
                     apply_auto_policy(cfg, state, lang, cmd_tx);
                     dirty = true;
                 }
@@ -342,22 +349,25 @@ fn apply_auto_policy(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
         // Nowhere left to go on the subscriptions. DeepSeek is the last
         // resort, and this is the only place the tray acts on its own — hence
         // the `fallback` setting guarding it, and hence `everything_spent`
-        // refusing to act on a usage reading it could not trust. It opens a
-        // session and nothing else: opening one spends nothing, and the other
-        // sessions keep their own account.
+        // refusing to act on a usage reading it could not trust. It copies
+        // the command and nothing else: pasting it spends nothing, and the
+        // other sessions keep their own account.
         if cfg.deepseek.available()
             && cfg.deepseek.fallback
-            && !state.deepseek_opened
+            && !state.deepseek_offered
             && auto::everything_spent(&cfg.auto, state.accounts())
         {
             state.last_auto_switch = Some(Instant::now());
-            if open_deepseek(cfg, state, lang) {
-                notify(lang.deepseek_fallback_title(), lang.deepseek_fallback_body());
+            if let Some(command) = copy_deepseek_command(cfg, state, lang, false) {
+                notify(
+                    lang.deepseek_fallback_title(),
+                    &lang.deepseek_fallback_body(&command),
+                );
             }
         }
         return;
     };
-    state.deepseek_opened = false;
+    state.deepseek_offered = false;
     state.last_auto_switch = Some(Instant::now());
     // Worked out before the order goes out: a policy that moves you around
     // unannounced reads as one that does nothing at all.
@@ -378,23 +388,36 @@ fn order_switch(cmd_tx: &Sender<Cmd>, target: Option<u32>) {
     let _ = cmd_tx.send(Cmd::Switch(target));
 }
 
-/// Opens a DeepSeek session, reporting whether the window went out. The caller
-/// does the talking, because the reason is the interesting part.
+/// Copies the DeepSeek command, reporting it when it landed on the clipboard.
+/// The caller does the talking, because a click and the fallback do not say the
+/// same thing.
 ///
-/// Refused without a key rather than attempted: the helper would print
-/// nothing, and Claude Code would have no credential of its own to use.
-fn open_deepseek(cfg: &config::Config, state: &mut State, lang: Lang) -> bool {
-    state.deepseek_opened = true;
+/// Refused without a key rather than copied: the helper would print nothing,
+/// and Claude Code would have no credential of its own to use. The launcher is
+/// rewritten first, so `claude-ds` always matches the current config.
+fn copy_deepseek_command(
+    cfg: &config::Config,
+    state: &mut State,
+    lang: Lang,
+    resume: bool,
+) -> Option<String> {
+    state.deepseek_offered = true;
     if !deepseek::key_available(cfg.deepseek.python(), cfg.deepseek.script.trim()) {
         notify(lang.deepseek_no_key_title(), lang.deepseek_no_key_body());
-        return false;
+        return None;
     }
-    match deepseek::open(&cfg.deepseek) {
-        Ok(()) => true,
+    if let Err(e) = deepseek::install(&cfg.deepseek) {
+        notify(lang.deepseek_failed_title(), &e);
+        state.error = Some(e);
+        return None;
+    }
+    let command = deepseek::command(resume);
+    match clipboard::copy(&command) {
+        Ok(()) => Some(command),
         Err(e) => {
             notify(lang.deepseek_failed_title(), &e);
             state.error = Some(e);
-            false
+            None
         }
     }
 }
@@ -705,12 +728,7 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
     }
 
     if cfg.deepseek.available() {
-        let _ = menu.append(&MenuItem::with_id(
-            "deepseek:open",
-            lang.deepseek_open(),
-            true,
-            None,
-        ));
+        let _ = menu.append(&deepseek_submenu(lang));
     }
 
     let _ = menu.append(&PredefinedMenuItem::separator());
@@ -727,6 +745,30 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&MenuItem::with_id("quit", lang.quit(), true, None));
     menu
+}
+
+/// DeepSeek submenu: the two commands the user may want on the clipboard, and
+/// the one thing about them that is not obvious from the labels — the session
+/// name that makes a DeepSeek conversation recognisable in the `-r` picker.
+fn deepseek_submenu(lang: Lang) -> Submenu {
+    let sub = Submenu::new(lang.deepseek_label(), true);
+    let _ = sub.append(&MenuItem::with_id(
+        "deepseek:copy",
+        lang.deepseek_copy_new(),
+        true,
+        None,
+    ));
+    let _ = sub.append(&MenuItem::with_id(
+        "deepseek:copy:resume",
+        lang.deepseek_copy_resume(),
+        true,
+        None,
+    ));
+    let _ = sub.append(&PredefinedMenuItem::separator());
+    for line in lang.deepseek_help() {
+        let _ = sub.append(&MenuItem::new(format!("   {line}"), false, None));
+    }
+    sub
 }
 
 /// Auto-switch submenu: the toggle, where it returns to, and the rule spelled

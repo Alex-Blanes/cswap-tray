@@ -25,7 +25,7 @@ ships a `menubar` for macOS; this fills the gap on Windows.
 - **Left click**: rotate to the next account. With two accounts, it toggles.
 - **Right click**: menu with every account and its usage (including when each
   window resets), auto-switch, prewarming, the icon legend and the actions,
-  plus the DeepSeek session when it is configured.
+  plus the DeepSeek command when it is configured.
 - **Hover**: a summary of all accounts.
 
 When an account's refresh token dies, `cswap` can no longer read its quota and
@@ -140,13 +140,18 @@ run as `<python> <script> get`, and exits non-zero when there is no key. With
 key in the Windows credential manager or another store — never in a file the
 tray or the repository can read.
 
-- **One click opens a session.** The menu entry opens a console titled
-  *DeepSeek* in your last project, running `claude --settings` with a file that
-  points at DeepSeek. That window is the only thing billed; your other sessions
-  keep their account and you can keep switching with `cswap` in the meantime.
+- **The menu copies the command.** *DeepSeek → Copy command* puts `claude-ds`
+  (or `claude-ds -r`) on the clipboard; paste it in luvus or in a terminal of
+  the project. Nothing is spawned, so the pane you are working in is the one
+  that gets the session.
 - **`claude-ds` in any terminal.** The tray installs `claude-ds.cmd` next to
   `claude.exe`, so a session is `claude-ds` — same arguments as `claude`, no
   flag to remember.
+- **`-r` continues a DeepSeek conversation.** `claude-ds -r DeepSeek` opens
+  Claude Code's resume picker with *DeepSeek* as the search term, so the list
+  holds the sessions this launcher named that way and a normal conversation is
+  not resumed under the paid endpoint by accident. The history of a tool-search
+  session can still trip the 422 below.
 - **Why not a switch.** Claude Code resolves the credential when a session
   starts, while the base URL from settings can reach a session already running.
   Patching `~/.claude/settings.json` therefore moves a running session's URL to
@@ -159,9 +164,9 @@ tray or the repository can read.
   ([deepseek-ai/DeepSeek-V3#1701](https://github.com/deepseek-ai/DeepSeek-V3/issues/1701)).
   The session pins `ENABLE_TOOL_SEARCH=false`, so every MCP tool is declared up
   front: ~50k tokens of context in a fresh session, paid per use.
-- **`fallback`** opens that window when auto-switch finds every subscription
-  spent. Opening it costs nothing; typing there does. It is offered once per
-  dry spell, and the menu entry is always there.
+- **`fallback`** copies that command when auto-switch finds every subscription
+  spent. The clipboard is overwritten once per dry spell; nothing is billed
+  until you paste it and send a message.
 - Prompt caching, PDF reading, claude.ai connectors and `/schedule` do not work
   against DeepSeek.
 
@@ -257,6 +262,7 @@ polling does not trigger API calls.
 | `src/auto.rs` | Auto-switch policy: a pure function over the snapshot |
 | `src/prewarm.rs` | Cold-reserve detection and message-landed evidence |
 | `src/deepseek.rs` | Per-session DeepSeek settings and the `claude-ds` launcher |
+| `src/clipboard.rs` | Write the copied command to the Windows clipboard |
 | `src/icon.rs` | Draw the RGBA icon: own 5×7 font plus bars |
 | `src/i18n.rs` | UI strings in English and Spanish |
 | `src/config.rs` | Per-account appearance and the personal/work heuristic |
@@ -266,7 +272,7 @@ Polling and switching run on a separate thread so the CLI — which is Python an
 takes about a second to start — never blocks the interface.
 
 ```powershell
-cargo test                                        # 46 tests
+cargo test                                        # 45 tests
 cargo test preview -- --ignored --nocapture       # preview the icon as ASCII
 ```
 

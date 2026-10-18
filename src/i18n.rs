@@ -106,28 +106,53 @@ impl Lang {
         )
     }
     // --- DeepSeek ----------------------------------------------------------
-    pub fn deepseek_open(self) -> &'static str {
+    pub fn deepseek_label(self) -> &'static str {
+        s!(self, "DeepSeek (API, pay per use)", "DeepSeek (API, pago por uso)")
+    }
+    pub fn deepseek_copy_new(self) -> &'static str {
         s!(
             self,
-            "Open a DeepSeek session (API, pay per use)",
-            "Abrir una sesión de DeepSeek (API, pago por uso)"
+            "Copy command: new session",
+            "Copiar comando: sesión nueva"
         )
     }
-    pub fn deepseek_opened_title(self) -> &'static str {
-        s!(self, "DeepSeek session", "Sesión de DeepSeek")
-    }
-    pub fn deepseek_opened_body(self) -> &'static str {
+    pub fn deepseek_copy_resume(self) -> &'static str {
         s!(
             self,
-            "A new window is running on DeepSeek, billed per use. Your other sessions are untouched.",
-            "Hay una ventana nueva con DeepSeek, que se factura por uso. Tus otras sesiones no cambian."
+            "Copy command: continue a session",
+            "Copiar comando: continuar una sesión"
+        )
+    }
+    pub fn deepseek_help(self) -> Vec<&'static str> {
+        s!(
+            self,
+            vec![
+                "Sessions opened this way are named DeepSeek;",
+                "the resume command filters on that name.",
+                "Billed per use."
+            ],
+            vec![
+                "Las sesiones abiertas así se llaman DeepSeek;",
+                "el comando de continuar filtra por ese nombre.",
+                "Se factura por uso."
+            ]
+        )
+    }
+    pub fn deepseek_copied_title(self) -> &'static str {
+        s!(self, "Command copied", "Comando copiado")
+    }
+    pub fn deepseek_copied_body(self, command: &str) -> String {
+        s!(
+            self,
+            format!("{command} — paste it in luvus or in a terminal of the project."),
+            format!("{command} — pégalo en luvus o en una terminal del proyecto.")
         )
     }
     pub fn deepseek_failed_title(self) -> &'static str {
         s!(
             self,
-            "Could not open the DeepSeek session",
-            "No he podido abrir la sesión de DeepSeek"
+            "Could not copy the DeepSeek command",
+            "No he podido copiar el comando de DeepSeek"
         )
     }
     pub fn deepseek_no_key_title(self) -> &'static str {
@@ -136,22 +161,22 @@ impl Lang {
     pub fn deepseek_no_key_body(self) -> &'static str {
         s!(
             self,
-            "Not opening it: without a key Claude Code has no credential of its own and would fall back to the subscription's. Store it with deepseek-key.py set.",
-            "No la abro: sin clave, Claude Code no tiene credencial propia y caería en la de la suscripción. Guárdala con deepseek-key.py set."
+            "Not copying it: without a key the session would fail before it starts. Store it with deepseek-key.py set.",
+            "No copio el comando: sin clave, la sesión fallaría antes de arrancar. Guárdala con deepseek-key.py set."
         )
     }
     pub fn deepseek_fallback_title(self) -> &'static str {
         s!(
             self,
-            "Every account spent → DeepSeek session",
-            "Cuotas agotadas → sesión de DeepSeek"
+            "Every account spent → DeepSeek",
+            "Cuotas agotadas → DeepSeek"
         )
     }
-    pub fn deepseek_fallback_body(self) -> &'static str {
+    pub fn deepseek_fallback_body(self, command: &str) -> String {
         s!(
             self,
-            "I opened a DeepSeek window in your last project. It is billed per use; close it when you are back.",
-            "He abierto una ventana de DeepSeek en tu último proyecto. Se factura por uso; ciérrala cuando vuelvas."
+            format!("Copied {command}. Paste it in luvus when you want to keep working; nothing is billed until you send a message."),
+            format!("He copiado {command}. Pégalo en luvus cuando quieras seguir; no se factura hasta que mandes un mensaje.")
         )
     }
     pub fn enable(self) -> &'static str {

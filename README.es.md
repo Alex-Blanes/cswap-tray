@@ -25,7 +25,7 @@ claude-swap trae un `menubar` para macOS; esto cubre el hueco en Windows.
 - **Clic izquierdo**: rota a la siguiente cuenta. Con dos cuentas, alterna.
 - **Clic derecho**: menú con cada cuenta y su uso (incluida la hora de reinicio
   de cada ventana), auto-cambio, precalentado, la leyenda del icono, las
-  acciones y la sesión de DeepSeek cuando está configurada.
+  acciones y el comando de DeepSeek cuando está configurado.
 - **Pasar el ratón**: resumen de todas las cuentas.
 
 Cuando el *refresh token* de una cuenta muere, `cswap` deja de poder leer su
@@ -144,14 +144,18 @@ recurso automático. Guarda la clave en el administrador de credenciales de
 Windows o en otro almacén — nunca en un fichero que puedan leer la bandeja o el
 repositorio.
 
-- **Un clic abre una sesión.** La entrada del menú abre una consola titulada
-  *DeepSeek* en tu último proyecto, ejecutando `claude --settings` con un
-  fichero que apunta a DeepSeek. Esa ventana es lo único que se factura; el
-  resto de tus sesiones conservan su cuenta y puedes seguir cambiando con
-  `cswap` mientras tanto.
+- **El menú copia el comando.** *DeepSeek → Copiar comando* deja `claude-ds`
+  (o `claude-ds -r`) en el portapapeles; pégalo en luvus o en una terminal del
+  proyecto. No se lanza ninguna ventana: la sesión nace en el panel en el que
+  estás trabajando.
 - **`claude-ds` en cualquier terminal.** La bandeja instala `claude-ds.cmd` al
   lado de `claude.exe`, así que una sesión es `claude-ds` — los mismos
   argumentos que `claude`, sin ningún parámetro que recordar.
+- **`-r` continúa una conversación de DeepSeek.** `claude-ds -r DeepSeek` abre
+  el selector de sesiones de Claude Code con *DeepSeek* como término de
+  búsqueda, así que la lista son las que este lanzador llamó así y no se retoma
+  por accidente una conversación normal contra el endpoint de pago. El
+  historial de una sesión con tool search puede tropezar con el 422 de abajo.
 - **Por qué no es un interruptor.** Claude Code resuelve la credencial al
   arrancar, mientras que la URL base de los ajustes puede llegar a una sesión
   ya abierta. Parchear `~/.claude/settings.json` mueve por tanto la URL de una
@@ -165,9 +169,9 @@ repositorio.
   La sesión fija `ENABLE_TOOL_SEARCH=false`, así que todas las herramientas MCP
   se declaran de entrada: unos 50k tokens de contexto por sesión nueva, pagados
   por uso.
-- **`fallback`** abre esa ventana cuando el cambio automático ve todas las
-  suscripciones agotadas. Abrirla no cuesta nada; escribir dentro, sí. Se ofrece
-  una vez por sequía y la entrada del menú sigue estando siempre.
+- **`fallback`** copia ese comando cuando el cambio automático ve todas las
+  suscripciones agotadas. El portapapeles se sobrescribe una vez por sequía; no
+  se factura nada hasta que lo pegues y mandes un mensaje.
 - Contra DeepSeek no funcionan la caché de prompts, leer PDF, los conectores de
   claude.ai ni `/schedule`.
 
@@ -266,6 +270,7 @@ así que sondear no dispara llamadas a la API.
 | `src/auto.rs` | Política de cambio automático: función pura sobre la instantánea |
 | `src/prewarm.rs` | Detección de reserva fría y de que el mensaje ha aterrizado |
 | `src/deepseek.rs` | Ajustes de DeepSeek por sesión y el lanzador `claude-ds` |
+| `src/clipboard.rs` | Escribir el comando copiado en el portapapeles de Windows |
 | `src/icon.rs` | Dibujar el icono RGBA: fuente 5×7 propia + barras |
 | `src/i18n.rs` | Cadenas de la interfaz en inglés y castellano |
 | `src/config.rs` | Apariencia por cuenta y heurística personal/trabajo |
@@ -275,7 +280,7 @@ El sondeo y los cambios de cuenta corren en un hilo aparte para que el CLI (que
 es Python y tarda ~1 s en arrancar) no bloquee la interfaz.
 
 ```powershell
-cargo test                                        # 46 tests
+cargo test                                        # 45 tests
 cargo test preview -- --ignored --nocapture       # previsualizar el icono en ASCII
 ```
 

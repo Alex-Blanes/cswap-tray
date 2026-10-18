@@ -24,7 +24,8 @@
 //!   (deepseek-ai/DeepSeek-V3#1701).
 //!
 //! `claude-ds.cmd`, installed next to `claude.exe`, hides the `--settings`
-//! flag: a session is `claude-ds` in any terminal, or a click on the tray.
+//! flag: a session is `claude-ds` in any terminal, or the menu entry, which
+//! copies that same command to the clipboard for luvus.
 
 use serde_json::{Map, Value};
 use std::os::windows::process::CommandExt;
@@ -34,7 +35,6 @@ use std::process::Command;
 use crate::config::{self, DeepSeekCfg};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 /// Marks an `apiKeyHelper` as ours. It is the helper script's own name, so a
 /// helper the user set up for something else is never removed.
@@ -42,6 +42,8 @@ const HELPER_MARK: &str = "deepseek-key";
 
 /// The launcher lives next to `claude.exe`, which is on PATH by definition.
 const LAUNCHER: &str = "claude-ds.cmd";
+/// What the user types (or pastes): the launcher without its extension.
+const COMMAND: &str = "claude-ds";
 /// Inside the generated launcher, so it is only ever deleted or rewritten when
 /// it is ours.
 const LAUNCHER_MARK: &str = "cswap-tray deepseek";
@@ -168,50 +170,16 @@ fn claude_exe() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Opens a new console running `claude-ds`, in the last project the user
-/// worked in. A fresh terminal rather than a flag in the current one: the
-/// session that is out of quota keeps its own endpoint and credential, and
-/// this one is the only thing that changes.
-pub fn open(cfg: &DeepSeekCfg) -> Result<(), String> {
-    install(cfg)?;
-    let mut command = Command::new("cmd.exe");
-    command
-        .args(["/k", LAUNCHER])
-        .creation_flags(CREATE_NEW_CONSOLE);
-    if let Some(dir) = last_project() {
-        command.current_dir(dir);
+/// The command the tray copies to the clipboard. `claude-ds` is the installed
+/// launcher; `-r DeepSeek` opens Claude Code's resume picker already filtered
+/// to the sessions this launcher named, so a normal conversation is not
+/// resumed under the paid endpoint by accident.
+pub fn command(resume: bool) -> String {
+    if resume {
+        format!("{COMMAND} -r DeepSeek")
+    } else {
+        COMMAND.to_string()
     }
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not open a DeepSeek session: {e}"))
-}
-
-/// The project of the last prompt in Claude Code's history, so the new window
-/// starts where the user was working. A heuristic, and it fails quietly: a
-/// missing history file just means `cmd` opens in the tray's directory.
-fn last_project() -> Option<PathBuf> {
-    let home = std::env::var("USERPROFILE").ok()?;
-    let path = PathBuf::from(home).join(".claude").join("history.jsonl");
-    // The whole file, because the last line can be a pasted prompt of any
-    // size; a fixed tail could land inside it and lose the project. It only
-    // runs when a session is opened.
-    let bytes = std::fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    project_from_lines(&text)
-        .filter(|dir| Path::new(dir).is_dir())
-        .map(PathBuf::from)
-}
-
-fn project_from_lines(text: &str) -> Option<String> {
-    text.lines().rev().find_map(|line| {
-        let value: Value = serde_json::from_str(line).ok()?;
-        value
-            .get("project")
-            .and_then(Value::as_str)
-            .filter(|dir| !dir.is_empty())
-            .map(str::to_string)
-    })
 }
 
 /// Whether the key is actually there. The gate on the way in: with no key the
@@ -352,20 +320,9 @@ mod tests {
     }
 
     #[test]
-    fn the_last_project_is_the_last_history_line() {
-        let text = concat!(
-            "{\"project\":\"C:\\\\a\",\"sessionId\":\"1\"}\n",
-            "{\"project\":\"C:\\\\b\",\"sessionId\":\"2\"}\n"
-        );
-        assert_eq!(project_from_lines(text).as_deref(), Some(r"C:\b"));
-    }
-
-    #[test]
-    fn a_truncated_last_line_falls_back_to_the_previous_one() {
-        let text = concat!(
-            "{\"project\":\"C:\\\\a\"}\n",
-            "{\"project\":\"C:\\\\b\""
-        );
-        assert_eq!(project_from_lines(text).as_deref(), Some(r"C:\a"));
+    fn the_copied_command_is_the_launcher_and_can_resume() {
+        assert_eq!(COMMAND, LAUNCHER.trim_end_matches(".cmd"));
+        assert_eq!(command(false), "claude-ds");
+        assert_eq!(command(true), "claude-ds -r DeepSeek");
     }
 }
