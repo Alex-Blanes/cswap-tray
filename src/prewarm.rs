@@ -31,7 +31,7 @@ pub fn cold_reserve(accounts: &[Account]) -> Option<u32> {
 pub fn prewarm_landed(acc: &Account, had_window: bool, base_pct: f32) -> bool {
     match acc.window(Win::FiveHour) {
         None => false,
-        Some(w) => !had_window || w.pct > base_pct + 0.01,
+        Some(w) => !had_window || w.pct.is_some_and(|p| p > base_pct + 0.01),
     }
 }
 

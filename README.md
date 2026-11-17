@@ -88,7 +88,7 @@ You live on your preferred account; when it runs out the app moves on its own
 to another one with room; and it returns as soon as the preferred one recovers.
 
 ```
-       preferred at 90 %  ──────────────►  another account with room
+       preferred at 95 %  ──────────────►  another account with room
        preferred < 80 %   ◄──────────────
 ```
 
@@ -99,7 +99,7 @@ place. The values live in `config.json`:
 |---|---|---|
 | `enabled` | `false` | Master switch |
 | `preferred` | first personal account detected | Where you want to be by default |
-| `switch_at_pct` | `90` | The active account is left at this point |
+| `switch_at_pct` | `95` | The active account is left at this point (90, 95 or 100 from the menu; per container on the NAS) |
 | `return_below_pct` | `80` | Return to the preferred one below this |
 | `cooldown_seconds` | `300` | Minimum wait between switches |
 

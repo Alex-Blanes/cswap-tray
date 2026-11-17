@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 # que escribe la bandeja. Vacía, el bucle solo se aparta de la cuenta activa
 # cuando llega al umbral, sin volver a ninguna en concreto.
 PREFERRED = ""
-SWITCH_AT, RETURN_BELOW = 90.0, 80.0
+SWITCH_AT, RETURN_BELOW = 95.0, 80.0
 COOLDOWN, INTERVAL = 300, 60
 CONFIG = os.path.expanduser("~/.config/cswap-preferida.json")
 
@@ -54,7 +54,9 @@ def pct(acc, window):
     resets = w.get("resetsAt")
     if resets and datetime.fromisoformat(resets) <= datetime.now(timezone.utc):
         return 0.0
-    return float(w.get("pct", 0))
+    # claude-swap >= 1.0 emite "pct": null cuando la API no da cifra: sin lectura, no 0 %.
+    p = w.get("pct")
+    return None if p is None else float(p)
 
 
 def binding(acc):
@@ -104,6 +106,11 @@ def selftest():
     old = acc(1, p, False, 100, 30)
     old["usage"]["fiveHour"]["resetsAt"] = "2000-01-01T00:00:00+00:00"
     assert d([old, acc(2, w, True, 50, 40)]) == 1, "una ventana ya reiniciada cuenta como 0 %"
+    nulo = acc(1, p, True, None, 95)
+    assert d([nulo, acc(2, w, False, 2, 19)]) == 2, "un pct null no tumba la pasada"
+    # Al 100 % aguanta hasta agotarla.
+    assert decide([acc(1, p, True, 99, 10), acc(2, w, False, 2, 19)], p, 100) is None
+    assert decide([acc(1, p, True, 100, 10), acc(2, w, False, 2, 19)], p, 100) == 2
     # La preferida se puede cambiar sin tocar el código.
     assert decide([acc(1, "nueva@x.com", False, 0, 0), acc(2, p, True, 50, 40)],
                   "nueva@x.com") == 1

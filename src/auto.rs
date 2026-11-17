@@ -115,6 +115,15 @@ mod tests {
     }
 
     #[test]
+    fn at_100_it_rides_the_account_dry() {
+        let at100 = AutoCfg { switch_at_pct: 100.0, ..cfg() };
+        let almost = accounts(&[(1, "personal@x.com", true, 99.0, 20.0), (2, "work@x.com", false, 2.0, 19.0)]);
+        assert_eq!(decide(&at100, &almost), None);
+        let spent = accounts(&[(1, "personal@x.com", true, 100.0, 20.0), (2, "work@x.com", false, 2.0, 19.0)]);
+        assert_eq!(decide(&at100, &spent), Some(2));
+    }
+
+    #[test]
     fn seven_day_window_also_binds() {
         // 5h has room but the weekly one is spent: we must leave anyway.
         let accs = accounts(&[(1, "personal@x.com", true, 10.0, 95.0), (2, "work@x.com", false, 2.0, 19.0)]);

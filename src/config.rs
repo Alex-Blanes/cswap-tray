@@ -55,9 +55,14 @@ pub struct AutoCfg {
     pub cooldown_seconds: u64,
 }
 
-fn default_switch_at() -> f32 {
-    90.0
+/// Mirrors `SWITCH_AT` in `scripts/cswap-preferida`.
+pub fn default_switch_at() -> f32 {
+    95.0
 }
+
+/// What the menus offer. 100 squeezes the account dry: the switch happens once
+/// a request has already been refused.
+pub const SWITCH_AT_CHOICES: [f32; 3] = [90.0, 95.0, 100.0];
 fn default_return_below() -> f32 {
     80.0
 }

@@ -37,6 +37,8 @@ pub struct Container {
     pub auto: bool,
     /// What that daemon will return to, read from its own config file.
     pub preferred: Option<String>,
+    /// Where that daemon leaves the active account. `None`: the script's default.
+    pub switch_at: Option<f32>,
 }
 
 /// What `list` runs on the NAS. The filter is applied server-side so only the
@@ -61,10 +63,12 @@ fn list_script(cfg: &NasCfg) -> String {
          else\n\
          echo AUTO=0\n\
          fi\n\
-         pref=$({docker} exec \"$name\" python3 -c 'import json,os\n\
-         try: print(json.load(open(os.path.expanduser(\"~/.config/cswap-preferida.json\"))).get(\"preferred\",\"\"))\n\
-         except Exception: pass' 2>/dev/null || true)\n\
-         echo \"PREF=$pref\"\n\
+         {docker} exec \"$name\" python3 -c 'import json,os\n\
+         try: c=json.load(open(os.path.expanduser(\"~/.config/cswap-preferida.json\")))\n\
+         except Exception: c={{}}\n\
+         c=c if isinstance(c,dict) else {{}}\n\
+         print(\"PREF=\"+str(c.get(\"preferred\") or \"\"))\n\
+         print(\"AT=\"+str(c.get(\"switch_at\") or \"\"))' 2>/dev/null || true\n\
          done\n"
     )
 }
@@ -170,12 +174,18 @@ pub fn set_auto(cfg: &NasCfg, container: &str, on: bool) -> Result<(), String> {
     ssh(cfg, &script).map(|_| ())
 }
 
-/// Sets the preferred account of a container's auto-switcher.
+/// Sets one key (`preferred`, `switch_at`) of a container's auto-switcher config.
 ///
-/// Installs the version that reads the preference from a file — the original
-/// had it hard-coded — writes that file and restarts the daemon only if it was
-/// running. The old script is left beside it as `.bak`.
-pub fn set_preferred(cfg: &NasCfg, container: &str, email: &str) -> Result<(), String> {
+/// Installs the version that reads its settings from a file — the original
+/// had them hard-coded — merges the key into that file, keeping the others,
+/// and restarts the daemon only if it was running. The old script is left
+/// beside it as `.bak`.
+pub fn set_setting(
+    cfg: &NasCfg,
+    container: &str,
+    key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
     let (d, c) = (docker(cfg), shq(container));
     ssh_stdin(
         cfg,
@@ -187,14 +197,21 @@ pub fn set_preferred(cfg: &NasCfg, container: &str, email: &str) -> Result<(), S
         ),
         PREFERIDA,
     )?;
-    let email = serde_json::to_string(email).map_err(|e| e.to_string())?;
+    // The update travels on stdin as JSON, so neither key nor value is ever
+    // spliced into shell or Python source.
     ssh_stdin(
         cfg,
         &format!(
-            "{d} exec -i {c} sh -c 'mkdir -p \"$HOME/.config\" && \
-             cat > \"$HOME/.config/cswap-preferida.json\"'"
+            "{d} exec -i {c} python3 -c 'import json,os,sys\n\
+             p=os.path.expanduser(\"~/.config/cswap-preferida.json\")\n\
+             try: c=json.load(open(p))\n\
+             except Exception: c={{}}\n\
+             c=c if isinstance(c,dict) else {{}}\n\
+             c.update(json.load(sys.stdin))\n\
+             os.makedirs(os.path.dirname(p),exist_ok=True)\n\
+             json.dump(c,open(p,\"w\"))'"
         ),
-        &format!("{{\"preferred\": {email}}}\n"),
+        &serde_json::json!({ key: value }).to_string(),
     )?;
     // The process in memory still runs the old code, so the switch to the
     // file-backed preference needs this one restart. Off stays off.
@@ -282,23 +299,31 @@ fn parse(text: &str) -> Snapshot {
     let mut buf = String::new();
     let mut auto = false;
     let mut preferred: Option<String> = None;
+    let mut switch_at: Option<f32> = None;
 
     let flush = |name: &mut Option<String>,
                  buf: &str,
                  auto: bool,
                  preferred: &mut Option<String>,
+                 switch_at: &mut Option<f32>,
                  out: &mut Vec<Container>| {
         if let Some(name) = name.take() {
             let accounts = serde_json::from_str::<CswapSnapshot>(buf)
                 .map(|s| s.accounts)
                 .unwrap_or_default();
-            out.push(Container { name, accounts, auto, preferred: preferred.take() });
+            out.push(Container {
+                name,
+                accounts,
+                auto,
+                preferred: preferred.take(),
+                switch_at: switch_at.take(),
+            });
         }
     };
 
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("===CSWAP ") {
-            flush(&mut name, &buf, auto, &mut preferred, &mut containers);
+            flush(&mut name, &buf, auto, &mut preferred, &mut switch_at, &mut containers);
             name = Some(rest.trim().to_string());
             buf.clear();
             auto = false;
@@ -306,12 +331,14 @@ fn parse(text: &str) -> Snapshot {
             auto = v == "1";
         } else if let Some(v) = line.trim().strip_prefix("PREF=") {
             preferred = Some(v.trim().to_string()).filter(|s| !s.is_empty());
+        } else if let Some(v) = line.trim().strip_prefix("AT=") {
+            switch_at = v.trim().parse().ok();
         } else if name.is_some() {
             buf.push_str(line);
             buf.push('\n');
         }
     }
-    flush(&mut name, &buf, auto, &mut preferred, &mut containers);
+    flush(&mut name, &buf, auto, &mut preferred, &mut switch_at, &mut containers);
     Snapshot { containers }
 }
 
@@ -326,6 +353,7 @@ mod tests {
 {\"schemaVersion\":1,\"accounts\":[{\"number\":2,\"email\":\"a@b.c\",\"active\":true,\"usageStatus\":\"ok\"}]}
 AUTO=1
 PREF=a@b.c
+AT=100.0
 ===CSWAP proyecto-x
 {}
 AUTO=0
@@ -338,10 +366,12 @@ AUTO=0
         assert!(snap.containers[0].accounts[0].active);
         assert!(snap.containers[0].auto);
         assert_eq!(snap.containers[0].preferred.as_deref(), Some("a@b.c"));
+        assert_eq!(snap.containers[0].switch_at, Some(100.0));
         assert_eq!(snap.containers[1].name, "proyecto-x");
         assert!(snap.containers[1].accounts.is_empty());
         assert!(!snap.containers[1].auto);
         assert!(snap.containers[1].preferred.is_none());
+        assert!(snap.containers[1].switch_at.is_none());
     }
 
     #[test]

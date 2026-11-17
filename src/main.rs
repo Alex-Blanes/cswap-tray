@@ -49,9 +49,11 @@ enum Cmd {
         container: String,
         on: bool,
     },
-    NasPrefer {
+    /// One key of a container's `cswap-preferida.json`.
+    NasSet {
         container: String,
-        email: String,
+        key: &'static str,
+        value: serde_json::Value,
     },
     NasDeepseek {
         container: String,
@@ -256,8 +258,8 @@ fn spawn_worker(
                     }
                     refresh_nas = true;
                 }
-                Some(Cmd::NasPrefer { container, email }) => {
-                    if let Err(e) = nas::set_preferred(&nas_cfg, &container, &email) {
+                Some(Cmd::NasSet { container, key, value }) => {
+                    if let Err(e) = nas::set_setting(&nas_cfg, &container, key, &value) {
                         notify(lang.nas_failed(), &container);
                         if nas_tx.send(Err(e)).is_err() {
                             break;
@@ -464,14 +466,31 @@ fn run_message_loop(
                                     })
                                     .map(|a| a.email.clone());
                                 if let Some(email) = email {
-                                    let _ = cmd_tx.send(Cmd::NasPrefer {
+                                    let _ = cmd_tx.send(Cmd::NasSet {
                                         container: container.to_string(),
-                                        email,
+                                        key: "preferred",
+                                        value: email.into(),
                                     });
                                     dirty = true;
                                 }
                             }
                         }
+                    } else if let Some(rest) = id.strip_prefix("nas:at:") {
+                        if let Some((container, p)) = rest.rsplit_once(':') {
+                            if let Ok(pct) = p.parse::<f32>() {
+                                let _ = cmd_tx.send(Cmd::NasSet {
+                                    container: container.to_string(),
+                                    key: "switch_at",
+                                    value: pct.into(),
+                                });
+                                dirty = true;
+                            }
+                        }
+                    } else if let Some(p) = id.strip_prefix("auto:at:").and_then(|p| p.parse().ok()) {
+                        cfg.auto.switch_at_pct = p;
+                        config::save(cfg);
+                        apply_auto_policy(cfg, state, lang, cmd_tx);
+                        dirty = true;
                     } else if let Some(container) = id.strip_prefix("nas:deepseek:") {
                         let _ = cmd_tx.send(Cmd::NasDeepseek {
                             container: container.to_string(),
@@ -762,7 +781,7 @@ fn arm_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx: &Sen
         .accounts()
         .iter()
         .find(|a| a.number == target)
-        .and_then(|a| a.window(cswap::Win::FiveHour).map(|w| (true, w.pct)))
+        .and_then(|a| a.window(cswap::Win::FiveHour).map(|w| (true, w.pct.unwrap_or(0.0))))
         .unwrap_or((false, 0.0));
     let name = state.name_of(cfg, lang, target);
 
@@ -1037,6 +1056,9 @@ fn nas_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
                 ));
             }
             let _ = csub.append(&psub);
+            // Unset means the script's default, which mirrors the tray's.
+            let at = c.switch_at.unwrap_or_else(config::default_switch_at);
+            let _ = csub.append(&switch_at_submenu(lang, at, &format!("nas:at:{}:", c.name)));
         }
         if cfg.deepseek.available() {
             let _ = csub.append(&MenuItem::with_id(
@@ -1055,6 +1077,17 @@ fn nas_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
         for line in lang.nas_help() {
             let _ = sub.append(&MenuItem::new(format!("   {line}"), false, None));
         }
+    }
+    sub
+}
+
+/// "Switch at: 95%" with one entry per choice; the id is `prefix` + the number.
+fn switch_at_submenu(lang: Lang, current: f32, prefix: &str) -> Submenu {
+    let sub = Submenu::new(lang.switch_at_title(current), true);
+    for p in config::SWITCH_AT_CHOICES {
+        let chosen = (p - current).abs() < 0.5;
+        let mark = if chosen { "✓" } else { "  " };
+        let _ = sub.append(&MenuItem::with_id(format!("{prefix}{p}"), format!("{mark} {p:.0}%"), !chosen, None));
     }
     sub
 }
@@ -1084,6 +1117,7 @@ fn auto_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
 
     let toggle = if a.enabled { lang.disable() } else { lang.enable() };
     let _ = sub.append(&MenuItem::with_id("auto:toggle", toggle, true, None));
+    let _ = sub.append(&switch_at_submenu(lang, a.switch_at_pct, "auto:at:"));
     let _ = sub.append(&PredefinedMenuItem::separator());
 
     // Help text as disabled entries: Windows greys them out and they cannot be
@@ -1191,8 +1225,8 @@ fn legend_submenu(lang: Lang) -> Submenu {
 }
 
 fn pct_of(w: Option<&cswap::Window>) -> String {
-    match w {
-        Some(w) => format!("{:.0}%", w.effective_pct()),
+    match w.and_then(|w| w.effective_pct()) {
+        Some(p) => format!("{p:.0}%"),
         None => "—".to_string(),
     }
 }

@@ -91,7 +91,7 @@ Vives en tu cuenta preferida; cuando se agota, la app pasa sola a otra con
 hueco; y vuelve a la preferida en cuanto se recupera.
 
 ```
-       preferida al 90 %  ──────────────►  otra cuenta con hueco
+       preferida al 95 %  ──────────────►  otra cuenta con hueco
        preferida < 80 %   ◄──────────────
 ```
 
@@ -102,7 +102,7 @@ ahí mismo. Los valores viven en `config.json`:
 |---|---|---|
 | `enabled` | `false` | Interruptor general |
 | `preferred` | primera cuenta personal detectada | Dónde quieres estar por defecto |
-| `switch_at_pct` | `90` | Se abandona la cuenta activa al llegar aquí |
+| `switch_at_pct` | `95` | Se abandona la cuenta activa al llegar aquí (90, 95 o 100 desde el menú; en el NAS, por contenedor) |
 | `return_below_pct` | `80` | Se vuelve a la preferida al bajar de aquí |
 | `cooldown_seconds` | `300` | Espera mínima entre cambios |
 

@@ -188,6 +188,9 @@ impl Lang {
     pub fn not_set(self) -> &'static str {
         s!(self, "not set", "sin elegir")
     }
+    pub fn switch_at_title(self, pct: f32) -> String {
+        s!(self, format!("Switch at: {pct:.0}%"), format!("Cambiar al: {pct:.0}%"))
+    }
     pub fn preferred_account(self) -> &'static str {
         s!(self, "Preferred account:", "Cuenta preferida:")
     }

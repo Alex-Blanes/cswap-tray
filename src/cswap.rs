@@ -56,7 +56,7 @@ impl Account {
             Win::FiveHour => u.five_hour.as_ref(),
             Win::SevenDay => u.seven_day.as_ref(),
         }?;
-        Some(w.effective_pct())
+        w.effective_pct()
     }
 
     pub fn window(&self, window: Win) -> Option<&Window> {
@@ -113,7 +113,8 @@ pub struct Usage {
 #[serde(rename_all = "camelCase")]
 pub struct Window {
     #[serde(default)]
-    pub pct: f32,
+    /// `null` since claude-swap 1.0: the API reported the window without a figure.
+    pub pct: Option<f32>,
     /// When this window rolls over, RFC3339 as cswap emits it.
     #[serde(default)]
     pub resets_at: Option<String>,
@@ -138,8 +139,8 @@ impl Window {
     }
 
     /// Percentage to act on and to show: zero once the window has rolled over.
-    pub fn effective_pct(&self) -> f32 {
-        if self.expired() { 0.0 } else { self.pct }
+    pub fn effective_pct(&self) -> Option<f32> {
+        if self.expired() { Some(0.0) } else { self.pct }
     }
 }
 
@@ -378,7 +379,7 @@ mod tests {
     }
 
     fn win(resets_at: &str, pct: f32) -> Window {
-        Window { pct, resets_at: Some(resets_at.into()), countdown: None, clock: None }
+        Window { pct: Some(pct), resets_at: Some(resets_at.into()), countdown: None, clock: None }
     }
 
     #[test]
@@ -400,21 +401,21 @@ mod tests {
     fn a_window_past_its_reset_reads_as_empty() {
         let spent = win("2020-01-01T00:00:00Z", 100.0);
         assert!(spent.expired());
-        assert_eq!(spent.effective_pct(), 0.0);
+        assert_eq!(spent.effective_pct(), Some(0.0));
     }
 
     #[test]
     fn a_live_window_keeps_its_reading() {
         let live = win("2999-01-01T00:00:00Z", 100.0);
         assert!(!live.expired());
-        assert_eq!(live.effective_pct(), 100.0);
+        assert_eq!(live.effective_pct(), Some(100.0));
     }
 
     #[test]
     fn an_unreadable_reset_never_fakes_free_quota() {
-        let unknown = Window { pct: 100.0, resets_at: None, countdown: None, clock: None };
+        let unknown = Window { pct: Some(100.0), resets_at: None, countdown: None, clock: None };
         assert!(!unknown.expired());
-        assert_eq!(unknown.effective_pct(), 100.0);
+        assert_eq!(unknown.effective_pct(), Some(100.0));
     }
 
     #[test]
@@ -428,6 +429,16 @@ mod tests {
         assert_eq!(acc.pct(Win::FiveHour), Some(0.0));
         assert_eq!(acc.pct(Win::SevenDay), Some(11.0));
         assert_eq!(acc.binding_pct(), Some(11.0));
+    }
+
+    #[test]
+    fn a_null_pct_is_no_reading_not_a_parse_error() {
+        let acc: Account = serde_json::from_str(
+            r#"{"number":1,"email":"a@x.com","usage":{"fiveHour":{"pct":null},"sevenDay":{"pct":40.0}}}"#,
+        )
+        .unwrap();
+        assert_eq!(acc.pct(Win::FiveHour), None);
+        assert_eq!(acc.binding_pct(), Some(40.0));
     }
 
     #[test]
