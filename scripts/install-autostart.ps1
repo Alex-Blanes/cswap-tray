@@ -39,6 +39,8 @@ function Stop-InstalledTray {
         Where-Object { $_.Path -eq $installed } |
         ForEach-Object {
             Stop-Process -Id $_.Id -Force
+            # Stop-Process returns before Windows lets go of the .exe.
+            Wait-Process -Id $_.Id -Timeout 10 -ErrorAction SilentlyContinue
             Write-Host "Stopped the running tray (PID $($_.Id))."
         }
 }
