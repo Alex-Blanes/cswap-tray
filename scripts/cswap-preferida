@@ -14,6 +14,7 @@ bandeja pueda cambiarlos sin reiniciar esto. Sin fichero valen los valores de aq
     cswap-preferida --dry-run    dice lo que haría, sin cambiar
     cswap-preferida --selftest   comprueba la regla
 """
+import fcntl
 import json
 import os
 import subprocess
@@ -121,6 +122,14 @@ def main():
     if "--selftest" in sys.argv:
         return selftest()
     once, dry = "--once" in sys.argv, "--dry-run" in sys.argv
+    if not once:
+        # Lo arrancan el entrypoint, luvus-arranque y la bandeja: si ya corre otro bucle, salir.
+        os.makedirs(os.path.expanduser("~/.cache"), exist_ok=True)
+        lock = open(os.path.expanduser("~/.cache/cswap-preferida.lock"), "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
     last_switch = 0.0
     while True:
         try:
