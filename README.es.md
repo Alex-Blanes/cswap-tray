@@ -180,7 +180,9 @@ repositorio.
 La bandeja lee y cambia las cuentas de los Claude Code que corren en el NAS, uno
 por proyecto (un contenedor por proyecto). No hay ningún agente al otro lado:
 cada contenedor ya lleva su `cswap`, y la bandeja lo maneja por SSH con
-`docker exec`.
+`docker exec`. Si el propio NAS tiene `cswap` en `~/.local/bin`, sale el primero
+como **NAS (host)** con el mismo menú, ejecutado directamente en la sesión SSH
+(DeepSeek sigue siendo solo de los contenedores).
 
 ```json
 "nas": {

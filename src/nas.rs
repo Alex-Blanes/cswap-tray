@@ -6,6 +6,10 @@
 //! menu wait a second and a half for its first line — and the menu only paints
 //! the cached answer.
 //!
+//! The NAS itself is one more target, [`HOST`]: the same commands run straight
+//! in the SSH shell instead of through `docker exec`, so the native Claude Code
+//! there gets the same menu as the containers.
+//!
 //! Switching pauses `cswap-preferida` first. That daemon puts the preferred
 //! account back within a minute, so a manual switch that left it running would
 //! look broken.
@@ -23,6 +27,30 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// account is changed from the tray. It reads its preferred account from
 /// `~/.config/cswap-preferida.json`, so later changes need no restart.
 const PREFERIDA: &str = include_str!("../scripts/cswap-preferida");
+
+/// The native Claude Code of the NAS, outside any container. Docker names
+/// cannot hold a space or parentheses, so it never collides with a container.
+pub const HOST: &str = "NAS (host)";
+
+/// The daemon of the target the command runs in, matched as the interpreter
+/// running that exact file. The full path keeps the NAS from matching the
+/// containers' daemons, which it also sees under the same uid; the `^python3`
+/// keeps an editor or a `tail` naming the file from being killed with it.
+const DAEMON_RUNNING: &str =
+    r#"pgrep -f "^python3 $HOME/.local/bin/[c]swap-preferida" >/dev/null 2>&1"#;
+const DAEMON_STOP: &str =
+    r#"pkill -f "^python3 $HOME/.local/bin/[c]swap-preferida" >/dev/null 2>&1 || true"#;
+
+/// What every target reports: its accounts, whether its daemon runs, and that
+/// daemon's settings, in the `===CSWAP` / `AUTO=` protocol [`parse`] reads.
+const INFO: &str = r#"cswap list --json || echo '{}'
+if pgrep -f "^python3 $HOME/.local/bin/[c]swap-preferida" >/dev/null 2>&1; then echo AUTO=1; else echo AUTO=0; fi
+python3 -c 'import json,os
+try: c=json.load(open(os.path.expanduser("~/.config/cswap-preferida.json")))
+except Exception: c={}
+c=c if isinstance(c,dict) else {}
+print("PREF="+str(c.get("preferred") or ""))
+print("AT="+str(c.get("switch_at") or ""))' 2>/dev/null || true"#;
 
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
@@ -51,26 +79,50 @@ fn list_script(cfg: &NasCfg) -> String {
     } else {
         format!("case \"$name:$image\" in *\"{filter}\"*) ;; *) continue;; esac\n")
     };
+    let info = shq(INFO);
     format!(
         "set -e\n\
+         if command -v cswap >/dev/null 2>&1; then\n\
+         echo '===CSWAP {HOST}'\n\
+         sh -c {info} || true\n\
+         fi\n\
          list=$({docker} ps --format '{{{{.Names}}}} {{{{.Image}}}}')\n\
          printf '%s\\n' \"$list\" | while read -r name image; do\n\
          {only}\
          echo \"===CSWAP $name\"\n\
-         {docker} exec \"$name\" cswap list --json || echo '{{}}'\n\
-         if {docker} exec \"$name\" sh -c 'pgrep -f \"[c]swap-preferida\" >/dev/null 2>&1'; then\n\
-         echo AUTO=1\n\
-         else\n\
-         echo AUTO=0\n\
-         fi\n\
-         {docker} exec \"$name\" python3 -c 'import json,os\n\
-         try: c=json.load(open(os.path.expanduser(\"~/.config/cswap-preferida.json\")))\n\
-         except Exception: c={{}}\n\
-         c=c if isinstance(c,dict) else {{}}\n\
-         print(\"PREF=\"+str(c.get(\"preferred\") or \"\"))\n\
-         print(\"AT=\"+str(c.get(\"switch_at\") or \"\"))' 2>/dev/null || true\n\
+         {docker} exec \"$name\" sh -c {info} || echo '{{}}'\n\
          done\n"
     )
+}
+
+/// `cmd` run inside `target`, as a command for the NAS shell.
+fn run(cfg: &NasCfg, target: &str, cmd: &str) -> String {
+    if target == HOST {
+        format!("sh -c {}", shq(cmd))
+    } else {
+        format!("{} exec {} sh -c {}", docker(cfg), shq(target), shq(cmd))
+    }
+}
+
+/// Same, reading the payload from the SSH session's stdin.
+fn run_stdin(cfg: &NasCfg, target: &str, cmd: &str) -> String {
+    if target == HOST {
+        run(cfg, target, cmd)
+    } else {
+        format!("{} exec -i {} sh -c {}", docker(cfg), shq(target), shq(cmd))
+    }
+}
+
+/// Starts the daemon in `target` and returns at once. On the NAS it is
+/// detached from the SSH session, which would otherwise wait for it.
+fn start_daemon(cfg: &NasCfg, target: &str) -> String {
+    if target == HOST {
+        "mkdir -p \"$HOME/.cache\"; setsid sh -c cswap-preferida \
+         >>\"$HOME/.cache/cswap-preferida.log\" 2>&1 </dev/null &"
+            .to_string()
+    } else {
+        format!("{} exec -d {} sh -c cswap-preferida", docker(cfg), shq(target))
+    }
 }
 
 /// `sudo -n`: a prompt would block a tray process forever, so it must fail
@@ -96,6 +148,9 @@ fn shq(s: &str) -> String {
 }
 
 fn ssh_cmd(cfg: &NasCfg, script: &str) -> Command {
+    // A non-interactive SSH shell leaves ~/.local/bin, where cswap lives on the
+    // NAS itself, out of PATH.
+    let script = format!("PATH=\"$HOME/.local/bin:$PATH\"; export PATH\n{script}");
     let mut cmd = Command::new("ssh");
     cmd.args([
         "-o", "BatchMode=yes",
@@ -105,7 +160,7 @@ fn ssh_cmd(cfg: &NasCfg, script: &str) -> Command {
         "-o", "ServerAliveInterval=5",
         "-o", "ServerAliveCountMax=2",
         cfg.ssh.trim(),
-        script,
+        &script,
     ])
     .creation_flags(CREATE_NO_WINDOW);
     cmd
@@ -153,23 +208,15 @@ pub fn list(cfg: &NasCfg) -> Result<Snapshot, String> {
 }
 
 pub fn switch(cfg: &NasCfg, container: &str, account: u32) -> Result<(), String> {
-    let (d, c) = (docker(cfg), shq(container));
-    ssh(
-        cfg,
-        &format!(
-            "{d} exec {c} pkill -f '[c]swap-preferida' >/dev/null 2>&1 || true\n\
-             {d} exec {c} cswap switch {account}"
-        ),
-    )
-    .map(|_| ())
+    ssh(cfg, &run(cfg, container, &format!("{DAEMON_STOP}\ncswap switch {account}")))
+        .map(|_| ())
 }
 
 pub fn set_auto(cfg: &NasCfg, container: &str, on: bool) -> Result<(), String> {
-    let (d, c) = (docker(cfg), shq(container));
     let script = if on {
-        format!("{d} exec -d {c} sh -c 'cswap-preferida'")
+        start_daemon(cfg, container)
     } else {
-        format!("{d} exec {c} pkill -f '[c]swap-preferida' >/dev/null 2>&1 || true")
+        run(cfg, container, DAEMON_STOP)
     };
     ssh(cfg, &script).map(|_| ())
 }
@@ -186,14 +233,13 @@ pub fn set_setting(
     key: &str,
     value: &serde_json::Value,
 ) -> Result<(), String> {
-    let (d, c) = (docker(cfg), shq(container));
     ssh_stdin(
         cfg,
-        &format!(
-            "{d} exec -i {c} sh -c 'cp -f /home/claude/.local/bin/cswap-preferida \
-             /home/claude/.local/bin/cswap-preferida.bak 2>/dev/null; \
-             cat > /home/claude/.local/bin/cswap-preferida && \
-             chmod 755 /home/claude/.local/bin/cswap-preferida'"
+        &run_stdin(
+            cfg,
+            container,
+            r#"b="$HOME/.local/bin/cswap-preferida"
+cp -f "$b" "$b.bak" 2>/dev/null; cat > "$b" && chmod 755 "$b""#,
         ),
         PREFERIDA,
     )?;
@@ -201,15 +247,17 @@ pub fn set_setting(
     // spliced into shell or Python source.
     ssh_stdin(
         cfg,
-        &format!(
-            "{d} exec -i {c} python3 -c 'import json,os,sys\n\
-             p=os.path.expanduser(\"~/.config/cswap-preferida.json\")\n\
-             try: c=json.load(open(p))\n\
-             except Exception: c={{}}\n\
-             c=c if isinstance(c,dict) else {{}}\n\
-             c.update(json.load(sys.stdin))\n\
-             os.makedirs(os.path.dirname(p),exist_ok=True)\n\
-             json.dump(c,open(p,\"w\"))'"
+        &run_stdin(
+            cfg,
+            container,
+            r#"python3 -c 'import json,os,sys
+p=os.path.expanduser("~/.config/cswap-preferida.json")
+try: c=json.load(open(p))
+except Exception: c={}
+c=c if isinstance(c,dict) else {}
+c.update(json.load(sys.stdin))
+os.makedirs(os.path.dirname(p),exist_ok=True)
+json.dump(c,open(p,"w"))'"#,
         ),
         &serde_json::json!({ key: value }).to_string(),
     )?;
@@ -218,11 +266,10 @@ pub fn set_setting(
     ssh(
         cfg,
         &format!(
-            "if {d} exec {c} sh -c 'pgrep -f \"[c]swap-preferida\" >/dev/null 2>&1'; then\n\
-             {d} exec {c} pkill -f '[c]swap-preferida' >/dev/null 2>&1 || true\n\
-             sleep 1\n\
-             {d} exec -d {c} sh -c 'cswap-preferida'\n\
-             fi"
+            "if {}; then\n{}\nsleep 1\n{}\nfi",
+            run(cfg, container, DAEMON_RUNNING),
+            run(cfg, container, DAEMON_STOP),
+            start_daemon(cfg, container),
         ),
     )
     .map(|_| ())
@@ -234,6 +281,10 @@ pub fn set_setting(
 /// process in the container. On disk it is mode 600 and read by the helper
 /// Claude Code calls when the session starts.
 pub fn open_deepseek(cfg: &NasCfg, container: &str, key: &str) -> Result<(), String> {
+    if container == HOST {
+        // The launcher and its settings assume the container's /home/claude.
+        return Err("DeepSeek runs only inside the containers".to_string());
+    }
     if key.is_empty()
         || !key.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     {
@@ -375,6 +426,28 @@ AUTO=0
     }
 
     #[test]
+    fn the_host_runs_in_place_and_containers_through_docker() {
+        let cfg = NasCfg::default();
+        assert_eq!(run(&cfg, HOST, "cswap list"), "sh -c 'cswap list'");
+        assert!(run(&cfg, "claude-code", "cswap list")
+            .ends_with("exec 'claude-code' sh -c 'cswap list'"));
+        assert!(start_daemon(&cfg, HOST).starts_with("mkdir -p"));
+        assert!(start_daemon(&cfg, HOST).ends_with('&'));
+        assert!(start_daemon(&cfg, "claude-code").contains("exec -d 'claude-code'"));
+        // The NAS block comes first and only when the NAS has its own cswap.
+        let script = list_script(&cfg);
+        assert!(script.find(HOST).unwrap() < script.find("ps --format").unwrap());
+        assert!(script.contains("command -v cswap"));
+    }
+
+    #[test]
+    fn the_host_parses_like_any_container() {
+        let snap = parse("===CSWAP NAS (host)\n{\"schemaVersion\":1,\"accounts\":[]}\nAUTO=1\n");
+        assert_eq!(snap.containers[0].name, HOST);
+        assert!(snap.containers[0].auto);
+    }
+
+    #[test]
     fn the_shipped_daemon_reads_its_preference_from_a_file() {
         assert!(PREFERIDA.contains("cswap-preferida.json"));
         assert!(PREFERIDA.contains("def settings()"));
@@ -385,6 +458,7 @@ AUTO=0
         // Refused before any SSH is attempted.
         assert!(open_deepseek(&NasCfg::default(), "c", "sk-x; rm -rf /").is_err());
         assert!(open_deepseek(&NasCfg::default(), "c", "").is_err());
+        assert!(open_deepseek(&NasCfg::default(), HOST, "sk-ok").is_err());
     }
 
     #[test]

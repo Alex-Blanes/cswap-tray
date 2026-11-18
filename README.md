@@ -175,7 +175,9 @@ tray or the repository can read.
 The tray reads and changes the accounts of the Claude Code containers running on
 the NAS, one per project. There is no agent on the other side: every container
 already carries its own `cswap`, and the tray drives it over SSH with
-`docker exec`.
+`docker exec`. If the NAS itself has `cswap` in `~/.local/bin`, it shows up first
+as **NAS (host)** with the same menu, run straight in the SSH shell (DeepSeek
+stays container-only).
 
 ```json
 "nas": {
