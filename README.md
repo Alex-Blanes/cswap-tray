@@ -71,6 +71,10 @@ cargo build --release
 # target\release\cswap-tray.exe  (~0.5 MB, no runtime)
 ```
 
+From Linux (the NAS), with Docker: `scripts/build-windows.sh` runs the tests under Wine and
+leaves `dist/cswap-tray.exe`. On Windows, fetch that `.exe` and install it with
+`install-autostart.ps1 -ExePath` (the commands are in the script's header).
+
 ## Run at startup
 
 ```powershell
