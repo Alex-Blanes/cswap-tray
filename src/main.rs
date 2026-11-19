@@ -7,7 +7,7 @@
 //! - Left click: rotate to the next account (`cswap switch`).
 //! - Right click: menu with the accounts, their usage and the actions.
 
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod auto;
 mod clipboard;
