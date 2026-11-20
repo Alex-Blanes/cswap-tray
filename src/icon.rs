@@ -71,6 +71,7 @@ const AMBER: [u8; 3] = [230, 160, 30];
 const RED: [u8; 3] = [248, 81, 73];
 const TRACK: [u8; 4] = [130, 130, 130, 120];
 const GRAY: [u8; 3] = [150, 150, 150];
+const BLUE: [u8; 3] = [56, 189, 248];
 
 fn bar_color(pct: f32) -> [u8; 3] {
     if pct >= 90.0 {
@@ -93,6 +94,9 @@ pub struct IconSpec {
     /// Some account needs re-authentication: a red pip in the corner, drawn
     /// even when the account in question is not the active one.
     pub alert: bool,
+    /// The icon stands for another machine (the NAS): a blue pip in the
+    /// bottom-left corner, so two icons with the same letter can be told apart.
+    pub remote: bool,
 }
 
 struct Canvas {
@@ -178,6 +182,10 @@ pub fn render(spec: &IconSpec, size: u32) -> Vec<u8> {
         let d = (size / 8).max(2);
         c.rect(0, 0, d, d, [RED[0], RED[1], RED[2], 255]);
     }
+    if spec.remote {
+        let d = (size / 8).max(2);
+        c.rect(0, size - d, d, d, [BLUE[0], BLUE[1], BLUE[2], 255]);
+    }
 
     c.px
 }
@@ -187,7 +195,7 @@ mod tests {
     use super::*;
 
     fn spec() -> IconSpec {
-        IconSpec { letter: 'W', color: [59, 130, 246], five_hour: Some(50.0), seven_day: Some(100.0), stale: false, alert: false }
+        IconSpec { letter: 'W', color: [59, 130, 246], five_hour: Some(50.0), seven_day: Some(100.0), stale: false, alert: false, remote: false }
     }
 
     #[test]
@@ -236,6 +244,19 @@ mod tests {
     }
 
     #[test]
+    fn remote_paints_the_bottom_left_corner() {
+        let size = 16u32;
+        let at = |buf: &[u8]| {
+            let i = (((size - 1) * size) * 4) as usize;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        let local = render(&spec(), size);
+        let remote = render(&IconSpec { remote: true, ..spec() }, size);
+        assert_ne!(at(&local), [BLUE[0], BLUE[1], BLUE[2], 255]);
+        assert_eq!(at(&remote), [BLUE[0], BLUE[1], BLUE[2], 255]);
+    }
+
+    #[test]
     fn unknown_char_falls_back_to_question_mark() {
         assert_eq!(glyph('%'), glyph('?'));
     }
@@ -252,6 +273,7 @@ mod tests {
                 seven_day: Some(p7),
                 stale: false,
                 alert: false,
+                remote: false,
             };
             let px = render(&s, size);
             println!("\n{letter} {size}x{size}  5h {p5}%  7d {p7}%");

@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use i18n::Lang;
 use tauri_winrt_notification::{Duration as ToastDuration, Toast};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, GetSystemMetrics, MSG, SM_CXSMICON, SetProcessDPIAware, SetTimer,
@@ -133,6 +133,7 @@ fn main() {
     };
 
     let tray = TrayIconBuilder::new()
+        .with_id("local")
         .with_menu(Box::new(Menu::new()))
         .with_menu_on_left_click(false)
         // The menu is built when it is about to be shown, so the tray opens it
@@ -142,10 +143,31 @@ fn main() {
         .with_icon(make_icon(&cfg, &state, icon_size))
         .build()
         .expect("could not create the tray icon");
+    // The NAS gets an icon of its own: you may be working on both machines at
+    // once, each on a different subscription, and both are worth a glance.
+    let nas_tray = cfg.nas.enabled().then(|| {
+        TrayIconBuilder::new()
+            .with_id("nas")
+            .with_menu(Box::new(Menu::new()))
+            .with_menu_on_left_click(false)
+            .with_menu_on_right_click(false)
+            .with_tooltip(nas_tooltip(&cfg, &state, lang))
+            .with_icon(make_nas_icon(&cfg, &state, icon_size))
+            .build()
+            .expect("could not create the NAS tray icon")
+    });
 
     let _ = cmd_tx.send(Cmd::Refresh);
     run_message_loop(
-        &tray, &mut cfg, &mut state, lang, icon_size, &cmd_tx, &snap_rx, &nas_rx,
+        &tray,
+        nas_tray.as_ref(),
+        &mut cfg,
+        &mut state,
+        lang,
+        icon_size,
+        &cmd_tx,
+        &snap_rx,
+        &nas_rx,
     );
 }
 
@@ -300,6 +322,7 @@ fn spawn_worker(
 
 fn run_message_loop(
     tray: &TrayIcon,
+    nas_tray: Option<&TrayIcon>,
     cfg: &mut config::Config,
     state: &mut State,
     lang: Lang,
@@ -502,6 +525,12 @@ fn run_message_loop(
         }
 
         while let Ok(event) = tray_events.try_recv() {
+            if event.id().0 == "nas" {
+                if let Some(nas_tray) = nas_tray {
+                    handle_nas_click(event, nas_tray, cfg, state, lang, cmd_tx);
+                }
+                continue;
+            }
             match event {
                 TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } => {
                     // With two accounts this toggles; with more, it advances in order.
@@ -514,9 +543,6 @@ fn run_message_loop(
                     // Asynchronous: the menu paints the cached answer and this
                     // refresh lands for the next opening. Waiting here would
                     // stall the menu behind an SSH round trip.
-                    if cfg.nas.enabled() {
-                        let _ = cmd_tx.send(Cmd::NasRefresh);
-                    }
                     show_fresh_menu(tray, cfg, state, lang);
                 }
                 _ => {}
@@ -526,7 +552,40 @@ fn run_message_loop(
         if dirty {
             let _ = tray.set_icon(Some(make_icon(cfg, state, icon_size)));
             let _ = tray.set_tooltip(Some(tooltip(cfg, state, lang)));
+            if let Some(nas_tray) = nas_tray {
+                let _ = nas_tray.set_icon(Some(make_nas_icon(cfg, state, icon_size)));
+                let _ = nas_tray.set_tooltip(Some(nas_tooltip(cfg, state, lang)));
+            }
         }
+    }
+}
+
+/// Left click moves the NAS host to its next account; right click opens the
+/// NAS menu. Like the local one, the menu paints the cached reading and the
+/// refresh it triggers lands for the next opening.
+fn handle_nas_click(
+    event: TrayIconEvent,
+    nas_tray: &TrayIcon,
+    cfg: &config::Config,
+    state: &State,
+    lang: Lang,
+    cmd_tx: &Sender<Cmd>,
+) {
+    let TrayIconEvent::Click { button, button_state: MouseButtonState::Up, .. } = event else {
+        return;
+    };
+    match button {
+        MouseButton::Left => {
+            if let Some(account) = nas_host(state).and_then(|h| next_account(&h.accounts)) {
+                let _ = cmd_tx.send(Cmd::NasSwitch { container: nas::HOST.to_string(), account });
+            }
+        }
+        MouseButton::Right => {
+            let _ = cmd_tx.send(Cmd::NasRefresh);
+            nas_tray.set_menu(Some(Box::new(build_nas_menu(cfg, state, lang))));
+            nas_tray.show_menu();
+        }
+        _ => {}
     }
 }
 
@@ -843,8 +902,24 @@ fn follow_up_prewarm(cfg: &config::Config, state: &mut State, lang: Lang, cmd_tx
 }
 
 fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
-    let alert = state.accounts().iter().any(|a| a.needs_relogin());
-    let spec = match state.active() {
+    account_icon(cfg, state.accounts(), state.error.is_some(), false, size)
+}
+
+fn make_nas_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
+    let accounts = nas_host(state).map(|c| c.accounts.as_slice()).unwrap_or(&[]);
+    account_icon(cfg, accounts, state.nas_error.is_some(), true, size)
+}
+
+/// Letter and bars of whichever account is active in `accounts`.
+fn account_icon(
+    cfg: &config::Config,
+    accounts: &[cswap::Account],
+    failed: bool,
+    remote: bool,
+    size: u32,
+) -> Icon {
+    let alert = accounts.iter().any(|a| a.needs_relogin());
+    let spec = match accounts.iter().find(|a| a.active) {
         Some(acc) => {
             let (_, letter, color) = config::presentation(cfg, &acc.email, acc.number);
             icon::IconSpec {
@@ -854,15 +929,17 @@ fn make_icon(cfg: &config::Config, state: &State, size: u32) -> Icon {
                 seven_day: acc.pct(cswap::Win::SevenDay),
                 stale: !acc.is_ok(),
                 alert,
+                remote,
             }
         }
         None => icon::IconSpec {
-            letter: if state.error.is_some() { '!' } else { '?' },
+            letter: if failed { '!' } else { '?' },
             color: [200, 200, 200],
             five_hour: None,
             seven_day: None,
             stale: true,
             alert,
+            remote,
         },
     };
     Icon::from_rgba(icon::render(&spec, size), size, size).expect("invalid icon buffer")
@@ -927,10 +1004,6 @@ fn build_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
         let _ = menu.append(&deepseek_submenu(lang));
     }
 
-    if cfg.nas.enabled() {
-        let _ = menu.append(&nas_submenu(cfg, state, lang));
-    }
-
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&auto_submenu(cfg, state, lang));
     let _ = menu.append(&prewarm_submenu(cfg, state, lang));
@@ -971,31 +1044,34 @@ fn deepseek_submenu(lang: Lang) -> Submenu {
     sub
 }
 
-/// NAS submenu: one child per Claude Code container, each with its accounts.
-/// The list is discovered on the NAS, not configured by hand: a new project
-/// container appears on the next refresh.
-fn nas_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
-    let title = if state.nas_error.is_some() {
-        lang.nas_unreachable()
-    } else {
-        lang.nas_label()
-    };
-    let sub = Submenu::new(title, true);
+/// The NAS's own Claude Code, the one the second icon stands for.
+fn nas_host(state: &State) -> Option<&nas::Container> {
+    state.nas.as_ref()?.containers.iter().find(|c| c.name == nas::HOST)
+}
 
+/// Menu of the NAS icon: the host's entries at the top level, then one
+/// submenu per container. The containers are discovered on the NAS, not
+/// configured by hand: a new project appears on the next refresh.
+fn build_nas_menu(cfg: &config::Config, state: &State, lang: Lang) -> Menu {
+    let menu = Menu::new();
     if let Some(err) = &state.nas_error {
-        let _ = sub.append(&MenuItem::new(format!("⚠ {}", truncate(err, 60)), false, None));
+        let _ = menu.append(&MenuItem::new(format!("⚠ {}", truncate(err, 60)), false, None));
+        let _ = menu.append(&PredefinedMenuItem::separator());
     }
-
-    let containers = state
-        .nas
-        .as_ref()
-        .map(|s| s.containers.as_slice())
-        .unwrap_or(&[]);
+    let containers = state.nas.as_ref().map(|s| s.containers.as_slice()).unwrap_or(&[]);
     if containers.is_empty() && state.nas_error.is_none() {
-        let _ = sub.append(&MenuItem::new(lang.nas_waiting(), false, None));
+        let _ = menu.append(&MenuItem::new(lang.nas_waiting(), false, None));
     }
-
-    for c in containers {
+    if let Some(host) = nas_host(state) {
+        for item in container_items(cfg, lang, host) {
+            let _ = menu.append(item.as_ref());
+        }
+    }
+    let others: Vec<&nas::Container> = containers.iter().filter(|c| c.name != nas::HOST).collect();
+    if !others.is_empty() {
+        let _ = menu.append(&PredefinedMenuItem::separator());
+    }
+    for c in &others {
         let active = c
             .accounts
             .iter()
@@ -1003,82 +1079,91 @@ fn nas_submenu(cfg: &config::Config, state: &State, lang: Lang) -> Submenu {
             .map(|a| config::presentation(cfg, &a.email, a.number).0)
             .unwrap_or_else(|| lang.not_set().to_string());
         let csub = Submenu::new(format!("{} — {}", c.name, active), true);
+        for item in container_items(cfg, lang, c) {
+            let _ = csub.append(item.as_ref());
+        }
+        let _ = menu.append(&csub);
+    }
+    if !containers.is_empty() {
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        for line in lang.nas_help() {
+            let _ = menu.append(&MenuItem::new(format!("   {line}"), false, None));
+        }
+    }
+    let _ = menu.append(&PredefinedMenuItem::separator());
+    let _ = menu.append(&MenuItem::with_id("nas:refresh", lang.refresh(), true, None));
+    menu
+}
 
+/// Accounts and controls of one NAS target, for the host's top level or a
+/// container's submenu alike.
+fn container_items(cfg: &config::Config, lang: Lang, c: &nas::Container) -> Vec<Box<dyn IsMenuItem>> {
+    let mut items: Vec<Box<dyn IsMenuItem>> = Vec::new();
+    for acc in &c.accounts {
+        let (name, letter, _) = config::presentation(cfg, &acc.email, acc.number);
+        let mark = if acc.active { "●" } else { "○" };
+        items.push(Box::new(MenuItem::with_id(
+            format!("nas:switch:{}:{}", c.name, acc.number),
+            format!("{mark} {name} ({letter}) — {}", usage_long(acc)),
+            !acc.active,
+            None,
+        )));
+    }
+    if c.accounts.is_empty() {
+        items.push(Box::new(MenuItem::new(lang.nas_no_data(), false, None)));
+    }
+
+    items.push(Box::new(PredefinedMenuItem::separator()));
+    // Clicking toggles: the label says what a click will do, and the id
+    // carries the state to land in.
+    let (label, next) = if c.auto {
+        (lang.nas_auto_on(), "off")
+    } else {
+        (lang.nas_auto_off(), "on")
+    };
+    items.push(Box::new(MenuItem::with_id(
+        format!("nas:auto:{}:{}", c.name, next),
+        label,
+        true,
+        None,
+    )));
+    if !c.accounts.is_empty() {
+        let pref_name = c
+            .preferred
+            .as_deref()
+            .and_then(|email| {
+                c.accounts
+                    .iter()
+                    .find(|a| a.email == email)
+                    .map(|a| config::presentation(cfg, &a.email, a.number).0)
+            })
+            .unwrap_or_else(|| lang.nas_preferred_unset().to_string());
+        let psub = Submenu::new(lang.nas_preferred_title(&pref_name), true);
         for acc in &c.accounts {
-            let (name, letter, _) = config::presentation(cfg, &acc.email, acc.number);
-            let mark = if acc.active { "●" } else { "○" };
-            let _ = csub.append(&MenuItem::with_id(
-                format!("nas:switch:{}:{}", c.name, acc.number),
-                format!("{mark} {name} ({letter}) — {}", usage_long(acc)),
-                !acc.active,
+            let (name, _, _) = config::presentation(cfg, &acc.email, acc.number);
+            let chosen = c.preferred.as_deref() == Some(acc.email.as_str());
+            let mark = if chosen { "✓" } else { "  " };
+            let _ = psub.append(&MenuItem::with_id(
+                format!("nas:prefer:{}:{}", c.name, acc.number),
+                format!("{mark} {name}"),
+                !chosen,
                 None,
             ));
         }
-        if c.accounts.is_empty() {
-            let _ = csub.append(&MenuItem::new(lang.nas_no_data(), false, None));
-        }
-
-        let _ = csub.append(&PredefinedMenuItem::separator());
-        // Clicking toggles: the label says what a click will do, and the id
-        // carries the state to land in.
-        let (label, next) = if c.auto {
-            (lang.nas_auto_on(), "off")
-        } else {
-            (lang.nas_auto_off(), "on")
-        };
-        let _ = csub.append(&MenuItem::with_id(
-            format!("nas:auto:{}:{}", c.name, next),
-            label,
+        items.push(Box::new(psub));
+        // Unset means the script's default, which mirrors the tray's.
+        let at = c.switch_at.unwrap_or_else(config::default_switch_at);
+        items.push(Box::new(switch_at_submenu(lang, at, &format!("nas:at:{}:", c.name))));
+    }
+    if cfg.deepseek.available() {
+        items.push(Box::new(MenuItem::with_id(
+            format!("nas:deepseek:{}", c.name),
+            lang.nas_deepseek(),
             true,
             None,
-        ));
-        if !c.accounts.is_empty() {
-            let pref_name = c
-                .preferred
-                .as_deref()
-                .and_then(|email| {
-                    c.accounts
-                        .iter()
-                        .find(|a| a.email == email)
-                        .map(|a| config::presentation(cfg, &a.email, a.number).0)
-                })
-                .unwrap_or_else(|| lang.nas_preferred_unset().to_string());
-            let psub = Submenu::new(lang.nas_preferred_title(&pref_name), true);
-            for acc in &c.accounts {
-                let (name, _, _) = config::presentation(cfg, &acc.email, acc.number);
-                let chosen = c.preferred.as_deref() == Some(acc.email.as_str());
-                let mark = if chosen { "✓" } else { "  " };
-                let _ = psub.append(&MenuItem::with_id(
-                    format!("nas:prefer:{}:{}", c.name, acc.number),
-                    format!("{mark} {name}"),
-                    !chosen,
-                    None,
-                ));
-            }
-            let _ = csub.append(&psub);
-            // Unset means the script's default, which mirrors the tray's.
-            let at = c.switch_at.unwrap_or_else(config::default_switch_at);
-            let _ = csub.append(&switch_at_submenu(lang, at, &format!("nas:at:{}:", c.name)));
-        }
-        if cfg.deepseek.available() {
-            let _ = csub.append(&MenuItem::with_id(
-                format!("nas:deepseek:{}", c.name),
-                lang.nas_deepseek(),
-                true,
-                None,
-            ));
-        }
-        let _ = csub.append(&MenuItem::with_id("nas:refresh", lang.refresh(), true, None));
-        let _ = sub.append(&csub);
+        )));
     }
-
-    if !containers.is_empty() {
-        let _ = sub.append(&PredefinedMenuItem::separator());
-        for line in lang.nas_help() {
-            let _ = sub.append(&MenuItem::new(format!("   {line}"), false, None));
-        }
-    }
-    sub
+    items
 }
 
 /// "Switch at: 95%" with one entry per choice; the id is `prefix` + the number.
@@ -1280,6 +1365,33 @@ fn tooltip(cfg: &config::Config, state: &State, lang: Lang) -> String {
     truncate(&lines.join("\n"), TOOLTIP_MAX)
 }
 
+fn nas_tooltip(cfg: &config::Config, state: &State, lang: Lang) -> String {
+    if let Some(err) = &state.nas_error {
+        return truncate(&format!("{}: {err}", lang.nas_unreachable()), TOOLTIP_MAX);
+    }
+    let Some(host) = nas_host(state) else {
+        return format!("{} · {}", lang.nas_label(), lang.loading());
+    };
+    let mut lines = vec![lang.nas_label().to_string()];
+    let mut ordered: Vec<&cswap::Account> = host.accounts.iter().collect();
+    ordered.sort_by_key(|a| !a.active);
+    for acc in ordered {
+        let (name, _, _) = config::presentation(cfg, &acc.email, acc.number);
+        let mark = if acc.active { "●" } else { "○" };
+        lines.push(format!("{mark} {name}: {}", usage_short(acc)));
+    }
+    truncate(&lines.join("\n"), TOOLTIP_MAX)
+}
+
+/// The account after the active one, wrapping: what a left click moves to.
+fn next_account(accounts: &[cswap::Account]) -> Option<u32> {
+    if accounts.len() < 2 {
+        return None;
+    }
+    let i = accounts.iter().position(|a| a.active).unwrap_or(accounts.len() - 1);
+    Some(accounts[(i + 1) % accounts.len()].number)
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -1304,6 +1416,25 @@ fn open_config() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_left_click_moves_to_the_next_account_and_wraps() {
+        let accs = |active: u32| {
+            let json = format!(
+                r#"{{"schemaVersion":1,"accounts":[
+                    {{"number":1,"email":"a@x.com","active":{}}},
+                    {{"number":2,"email":"b@x.com","active":{}}},
+                    {{"number":3,"email":"c@x.com","active":{}}}]}}"#,
+                active == 1,
+                active == 2,
+                active == 3
+            );
+            serde_json::from_str::<cswap::Snapshot>(&json).unwrap().accounts
+        };
+        assert_eq!(next_account(&accs(1)), Some(2));
+        assert_eq!(next_account(&accs(3)), Some(1));
+        assert_eq!(next_account(&accs(1)[..1]), None, "a single account has nowhere to go");
+    }
 
     #[test]
     fn truncate_respects_limit() {

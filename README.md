@@ -183,6 +183,12 @@ already carries its own `cswap`, and the tray drives it over SSH with
 as **NAS (host)** with the same menu, run straight in the SSH shell (DeepSeek
 stays container-only).
 
+The NAS gets **its own tray icon**, marked with a blue pip in the bottom-left
+corner: letter and bars of the NAS (host) active account, as the other icon
+does for this PC. Both subscriptions stay in view when you work on both
+machines at once. Left click moves the NAS to its next account. Right click:
+the host's accounts and controls at the top, one submenu per container below.
+
 ```json
 "nas": {
   "ssh": "nas",              // ~/.ssh/config alias; empty turns the section off
@@ -193,7 +199,7 @@ stays container-only).
 ```
 
 Containers are discovered: any whose name or image contains `filter` shows up
-under the `NAS` submenu on the next read. Inside each one:
+in the NAS icon's menu on the next read. Inside each one:
 
 - **Accounts**: click to switch. A manual switch pauses `cswap-preferida` in
   that container; otherwise it would move back to the preferred one within a

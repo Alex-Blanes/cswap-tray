@@ -188,6 +188,13 @@ cada contenedor ya lleva su `cswap`, y la bandeja lo maneja por SSH con
 como **NAS (host)** con el mismo menú, ejecutado directamente en la sesión SSH
 (DeepSeek sigue siendo solo de los contenedores).
 
+El NAS tiene **su propio icono** en la bandeja, con un punto azul abajo a la
+izquierda: letra y barras de la cuenta activa del NAS (host), igual que el otro
+icono hace con la de este PC. Así se ven las dos suscripciones si trabajas en
+los dos sitios a la vez. Clic izquierdo: el NAS pasa a la siguiente cuenta.
+Clic derecho: arriba las cuentas y controles del host; debajo, un submenú por
+contenedor.
+
 ```json
 "nas": {
   "ssh": "nas",              // alias de ~/.ssh/config; vacío apaga la sección
@@ -198,7 +205,7 @@ como **NAS (host)** con el mismo menú, ejecutado directamente en la sesión SSH
 ```
 
 Los contenedores se descubren solos: el que se llame, o use una imagen, que
-contenga `filter` aparece en el submenú `NAS` en la siguiente lectura. Dentro de
+contenga `filter` aparece en el menú del icono del NAS en la siguiente lectura. Dentro de
 cada uno:
 
 - **Cuentas**: clic para cambiar. El cambio manual pausa `cswap-preferida` en
