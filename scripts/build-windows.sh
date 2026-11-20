@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds the Windows tray on the NAS (Linux): tests under Wine, then the release
-# .exe into dist/. The repo lives here; Windows machines only fetch the binary:
+# .exe into dist/. The repo lives here; Windows machines only get the binary,
+# pushed by `scripts/deploy-windows.sh alex-@192.168.1.132`, or fetched by hand:
 #
 #   scp nas:/volume2/claude/proyectos/cswap-tray/dist/cswap-tray.exe $env:TEMP\
 #   scp nas:/volume2/claude/proyectos/cswap-tray/scripts/install-autostart.ps1 $env:TEMP\
